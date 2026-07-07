@@ -35,6 +35,8 @@ target_sources(LightHost PRIVATE
     Source/HostStartup.cpp
     Source/IconMenu.cpp
     Source/PluginWindow.cpp
+    Source/Engine/GraphDocument.cpp
+    Source/Engine/GraphController.cpp
 )
 
 # Tray icons referenced in code as BinaryData::menu_icon_png / menu_icon_white_png
@@ -70,3 +72,75 @@ target_link_libraries(LightHost PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags
 )
+
+# ---------------------------------------------------------------------------
+# Headless unit tests (off by default). Exercises the graph document model
+# with no audio device / real plugins / display, so it runs in CI or a sandbox.
+#   cmake -B build -DLIGHTHOST_BUILD_TESTS=ON
+#   cmake --build build --target LightHostTests && ./build/LightHostTests_artefacts/LightHostTests
+# ---------------------------------------------------------------------------
+option(LIGHTHOST_BUILD_TESTS "Build headless unit tests" OFF)
+
+if(LIGHTHOST_BUILD_TESTS)
+    juce_add_console_app(LightHostTests PRODUCT_NAME "LightHostTests")
+    juce_generate_juce_header(LightHostTests)
+
+    target_sources(LightHostTests PRIVATE
+        Tests/GraphDocumentTests.cpp
+        Source/Engine/GraphDocument.cpp
+    )
+
+    target_compile_definitions(LightHostTests PRIVATE
+        JUCE_PLUGINHOST_VST3=1
+        JUCE_PLUGINHOST_VST=0
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_STANDALONE_APPLICATION=1
+    )
+
+    target_link_libraries(LightHostTests PRIVATE
+        juce::juce_audio_processors   # PluginDescription, KnownPluginList (pulls core/data_structures)
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+    )
+endif()
+
+# ---------------------------------------------------------------------------
+# Runtime tests (off by default). Drives the real GraphController against
+# installed VST3 plugins — duplicate-plugin coexistence, bypass-survives-restart,
+# and legacy first-run migration — with no tray menu or display interaction.
+# Skips (exit 0) on a box with no loadable stereo VST3.
+#   cmake -B build -DLIGHTHOST_BUILD_RUNTIME_TESTS=ON
+#   cmake --build build --config Release --target LightHostRuntimeTests
+#   "build/LightHostRuntimeTests_artefacts/Release/LightHostRuntimeTests.exe"
+# ---------------------------------------------------------------------------
+option(LIGHTHOST_BUILD_RUNTIME_TESTS "Build runtime tests that load real plugins" OFF)
+
+if(LIGHTHOST_BUILD_RUNTIME_TESTS)
+    juce_add_console_app(LightHostRuntimeTests PRODUCT_NAME "LightHostRuntimeTests")
+    juce_generate_juce_header(LightHostRuntimeTests)
+
+    target_sources(LightHostRuntimeTests PRIVATE
+        Tests/GraphRuntimeTests.cpp
+        Source/Engine/GraphDocument.cpp
+        Source/Engine/GraphController.cpp
+        Source/PluginWindow.cpp
+    )
+
+    target_compile_definitions(LightHostRuntimeTests PRIVATE
+        JUCE_PLUGINHOST_VST3=1
+        JUCE_PLUGINHOST_VST=0
+        $<$<PLATFORM_ID:Darwin>:JUCE_PLUGINHOST_AU=1>
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_MODAL_LOOPS_PERMITTED=1
+        JUCE_STANDALONE_APPLICATION=1
+    )
+
+    target_link_libraries(LightHostRuntimeTests PRIVATE
+        juce::juce_audio_utils   # AudioProcessorGraph, format manager, plugin instances
+        juce::juce_gui_extra     # DocumentWindow base for PluginWindow
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+    )
+endif()
