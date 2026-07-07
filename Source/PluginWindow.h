@@ -1,6 +1,8 @@
 #ifndef PluginWindow_h
 #define PluginWindow_h
 
+#include <JuceHeader.h>
+
 ApplicationProperties& getAppProperties();
 
 class PluginWindow  : public DocumentWindow
@@ -16,11 +18,11 @@ public:
     };
 
     PluginWindow (Component* pluginEditor, AudioProcessorGraph::Node*, WindowFormatType);
-    ~PluginWindow();
+    ~PluginWindow() override;
 
     static PluginWindow* getWindowFor (AudioProcessorGraph::Node*, WindowFormatType);
 
-    static void closeCurrentlyOpenWindowsFor (const uint32 nodeId);
+    static void closeCurrentlyOpenWindowsFor (AudioProcessorGraph::NodeID nodeId);
     static void closeAllCurrentlyOpenWindows();
     static bool containsActiveWindows();
 
@@ -53,4 +55,4 @@ inline String getLastYProp (PluginWindow::WindowFormatType type)    { return "ui
 inline String getOpenProp  (PluginWindow::WindowFormatType type)    { return "uiopen_"  + toString (type); }
 
 
-#endif /* PluginWindow_hpp */
+#endif /* PluginWindow_h */

@@ -2,7 +2,7 @@
 #include "PluginWindow.h"
 
 class PluginWindow;
-static Array <PluginWindow*> activePluginWindows;
+static Array<PluginWindow*> activePluginWindows;
 
 PluginWindow::PluginWindow (Component* const pluginEditor,
                             AudioProcessorGraph::Node* const o,
@@ -13,7 +13,7 @@ PluginWindow::PluginWindow (Component* const pluginEditor,
       type (t)
 {
     setSize (400, 300);
-    setUsingNativeTitleBar(true);
+    setUsingNativeTitleBar (true);
     setContentOwned (pluginEditor, true);
 
     setTopLeftPosition (owner->properties.getWithDefault (getLastXProp (type), Random::getSystemRandom().nextInt (500)),
@@ -24,13 +24,12 @@ PluginWindow::PluginWindow (Component* const pluginEditor,
     setVisible (true);
 
     activePluginWindows.add (this);
-    
 }
 
-void PluginWindow::closeCurrentlyOpenWindowsFor (const uint32 nodeId)
+void PluginWindow::closeCurrentlyOpenWindowsFor (AudioProcessorGraph::NodeID nodeId)
 {
     for (int i = activePluginWindows.size(); --i >= 0;)
-        if (activePluginWindows.getUnchecked(i)->owner->nodeId == nodeId)
+        if (activePluginWindows.getUnchecked (i)->owner->nodeID == nodeId)
             delete activePluginWindows.getUnchecked (i);
 }
 
@@ -57,26 +56,24 @@ class ProcessorProgramPropertyComp : public PropertyComponent,
                                      private AudioProcessorListener
 {
 public:
-    ProcessorProgramPropertyComp (const String& name, AudioProcessor& p, int index_)
+    ProcessorProgramPropertyComp (const String& name, AudioProcessor& p)
         : PropertyComponent (name),
-          owner (p),
-          index (index_)
+          owner (p)
     {
         owner.addListener (this);
     }
 
-    ~ProcessorProgramPropertyComp()
+    ~ProcessorProgramPropertyComp() override
     {
         owner.removeListener (this);
     }
 
-    void refresh() { }
-    virtual void audioProcessorChanged (AudioProcessor*) { }
-    virtual void audioProcessorParameterChanged(AudioProcessor* processor, int, float) { }
+    void refresh() override { }
+    void audioProcessorChanged (AudioProcessor*, const ChangeDetails&) override { }
+    void audioProcessorParameterChanged (AudioProcessor*, int, float) override { }
 
 private:
     AudioProcessor& owner;
-    const int index;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ProcessorProgramPropertyComp)
 };
@@ -104,7 +101,7 @@ public:
             if (name.isEmpty())
                 name = "Unnamed";
 
-            ProcessorProgramPropertyComp* const pc = new ProcessorProgramPropertyComp (name, *p, i);
+            auto* pc = new ProcessorProgramPropertyComp (name, *p);
             programs.add (pc);
             totalHeight += pc->getPreferredHeight();
         }
@@ -114,12 +111,12 @@ public:
         setSize (400, jlimit (25, 400, totalHeight));
     }
 
-    void paint (Graphics& g)
+    void paint (Graphics& g) override
     {
         g.fillAll (Colours::grey);
     }
 
-    void resized()
+    void resized() override
     {
         panel.setBounds (getLocalBounds());
     }
@@ -137,9 +134,9 @@ PluginWindow* PluginWindow::getWindowFor (AudioProcessorGraph::Node* const node,
     jassert (node != nullptr);
 
     for (int i = activePluginWindows.size(); --i >= 0;)
-        if (activePluginWindows.getUnchecked(i)->owner == node
-             && activePluginWindows.getUnchecked(i)->type == type)
-            return activePluginWindows.getUnchecked(i);
+        if (activePluginWindows.getUnchecked (i)->owner == node
+             && activePluginWindows.getUnchecked (i)->type == type)
+            return activePluginWindows.getUnchecked (i);
 
     AudioProcessor* processor = node->getProcessor();
     AudioProcessorEditor* ui = nullptr;
@@ -155,14 +152,14 @@ PluginWindow* PluginWindow::getWindowFor (AudioProcessorGraph::Node* const node,
     if (ui == nullptr)
     {
         if (type == Generic || type == Parameters)
-            ui = new GenericAudioProcessorEditor (processor);
+            ui = new GenericAudioProcessorEditor (*processor);
         else if (type == Programs)
             ui = new ProgramAudioProcessorEditor (processor);
     }
 
     if (ui != nullptr)
     {
-        if (AudioPluginInstance* const plugin = dynamic_cast<AudioPluginInstance*> (processor))
+        if (auto* const plugin = dynamic_cast<AudioPluginInstance*> (processor))
             ui->setName (plugin->getName());
 
         return new PluginWindow (ui, node, type);
