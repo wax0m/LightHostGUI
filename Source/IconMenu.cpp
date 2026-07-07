@@ -6,7 +6,7 @@
 //
 //
 
-#include "../JuceLibraryCode/JuceHeader.h"
+#include <JuceHeader.h>
 #include "IconMenu.hpp"
 #include "PluginWindow.h"
 #include <ctime>

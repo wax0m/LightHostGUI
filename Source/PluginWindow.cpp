@@ -1,4 +1,4 @@
-#include "../JuceLibraryCode/JuceHeader.h"
+#include <JuceHeader.h>
 #include "PluginWindow.h"
 
 class PluginWindow;

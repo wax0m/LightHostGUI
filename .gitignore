@@ -1,3 +1,9 @@
 Builds/
 JuceLibraryCode/
 lib/
+build*/
+cmake-build-*/
+.vs/
+.idea/
+.cache/
+CMakeUserPresets.json

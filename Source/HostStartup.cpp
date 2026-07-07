@@ -1,4 +1,4 @@
-#include "../JuceLibraryCode/JuceHeader.h"
+#include <JuceHeader.h>
 #include "IconMenu.hpp"
 
 #if ! (JUCE_PLUGINHOST_VST || JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
