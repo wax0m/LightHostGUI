@@ -37,6 +37,7 @@ target_sources(LightHost PRIVATE
     Source/PluginWindow.cpp
     Source/Engine/GraphDocument.cpp
     Source/Engine/GraphController.cpp
+    Source/Engine/SelfTest.cpp
 )
 
 # Tray icons referenced in code as BinaryData::menu_icon_png / menu_icon_white_png
@@ -122,6 +123,7 @@ if(LIGHTHOST_BUILD_RUNTIME_TESTS)
 
     target_sources(LightHostRuntimeTests PRIVATE
         Tests/GraphRuntimeTests.cpp
+        Source/Engine/SelfTest.cpp
         Source/Engine/GraphDocument.cpp
         Source/Engine/GraphController.cpp
         Source/PluginWindow.cpp
