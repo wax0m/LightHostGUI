@@ -14,6 +14,7 @@
 #include <map>
 #include <vector>
 #include "GraphDocument.h"
+#include "MeterProcessor.h"
 
 class GraphController
 {
@@ -45,6 +46,13 @@ public:
     //==============================================================================
     AudioProcessorGraph::Node* getNodeForUid (const String& uid) const;
 
+    //==============================================================================
+    // Master meter taps for the GUI (message-thread reads). Null until the first
+    // rebuild, or if the corresponding IO node is absent. Meters are spliced into
+    // the live graph only — they are never stored in the GraphDocument.
+    const MeterTap* getInputMeter()  const noexcept;
+    const MeterTap* getOutputMeter() const noexcept;
+
     GraphDocument document;
 
 private:
@@ -53,9 +61,16 @@ private:
     std::vector<String> getChainUids() const;            // audioIn .. audioOut, doc order
     void rewriteChainConnections (const std::vector<String>& chainUids);
 
+    // Meter plumbing (runtime only).
+    void insertMasterMeters();
+    MeterProcessor* spliceMeterBefore (AudioProcessorGraph::NodeID target);
+    MeterProcessor* spliceMeterAfter  (AudioProcessorGraph::NodeID source);
+
     AudioProcessorGraph& graph;
     AudioPluginFormatManager& formatManager;
     std::map<String, AudioProcessorGraph::NodeID> uidToNodeId;
+    MeterProcessor* inputMeter  = nullptr;   // owned by the graph node, not us
+    MeterProcessor* outputMeter = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE (GraphController)
 };

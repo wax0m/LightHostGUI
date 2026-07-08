@@ -298,6 +298,94 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test D — the master meters track real audio flowing through the graph.
+    //          Proves the spliced MeterProcessors measure a live signal (not just
+    //          a synthetic unit test) and fall back to zero on silence.
+    //==========================================================================
+    std::cout << "\n[D] master meters track live audio" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("meter");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        AudioBuffer<float> block (2, blockSize);
+        MidiBuffer midi;
+        Random rng (0x1965abcd);
+
+        // Fill `block` with white noise, process `count` blocks, and return the
+        // highest ch0 peak the given meter saw. Processing many blocks lets any
+        // plugin latency fill through before we sample the meter.
+        auto driveNoise = [&] (const MeterTap* meter, int count)
+        {
+            float maxPeak = 0.0f;
+            for (int b = 0; b < count; ++b)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    float* d = block.getWritePointer (ch);
+                    for (int i = 0; i < blockSize; ++i)
+                        d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
+                }
+                midi.clear();
+                graph.processBlock (block, midi);
+                if (meter != nullptr)
+                    maxPeak = jmax (maxPeak, meter->read().peak[0]);
+            }
+            return maxPeak;
+        };
+
+        // Process `count` silent blocks and return the meter's final ch0 peak.
+        auto driveSilence = [&] (const MeterTap* meter, int count)
+        {
+            block.clear();
+            for (int b = 0; b < count; ++b) { midi.clear(); graph.processBlock (block, midi); }
+            return meter != nullptr ? meter->read().peak[0] : 1.0f;
+        };
+
+        // Phase 1 — with a real plugin in the chain, noise must register on both
+        // the input (dry) and output (post-plugin) master meters. Proof the taps
+        // see live audio flowing through a genuine plugin node.
+        const String uid = controller.appendToChain (pA);
+        r.expect (uid.isNotEmpty(), "meter-test plugin instantiated");
+
+        const MeterTap* inMeter  = controller.getInputMeter();
+        const MeterTap* outMeter = controller.getOutputMeter();
+        r.expect (inMeter  != nullptr, "input meter present after rebuild");
+        r.expect (outMeter != nullptr, "output meter present after rebuild");
+
+        const float inNoise  = driveNoise (inMeter,  32);
+        const float outNoise = driveNoise (outMeter, 32);
+        r.expect (inNoise  > 0.0f, "input meter registers noise through a real plugin chain");
+        r.expect (outNoise > 0.0f, "output meter registers signal reaching the output");
+
+        // Phase 2 — decay is a property of the METER, not the plugin: some real
+        // plugins idle noisily or self-oscillate (Graillon emits ~+10 dB on a
+        // silent input). Remove the plugin so the chain is a clean
+        // audioIn -> meters -> audioOut pass-through, then prove the output meter
+        // rises on noise and collapses to ~0 on silence.
+        controller.removeFromChain (uid);           // rebuild -> fresh meter nodes
+        const MeterTap* passOut = controller.getOutputMeter();
+        r.expect (passOut != nullptr, "output meter present after plugin removal");
+
+        const float passNoise = driveNoise   (passOut, 8);
+        const float passRest  = driveSilence (passOut, 8);
+        r.expect (passNoise > 0.0f,    "pass-through output meter rises on noise");
+        r.expect (passRest  < 1.0e-4f, "pass-through output meter falls back to ~0 on silence");
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();

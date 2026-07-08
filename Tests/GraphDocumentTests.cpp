@@ -10,6 +10,8 @@
 #include "../Source/Engine/GraphDocument.h"
 #include <iostream>
 
+int runMeterTests (int& checks);   // Tests/MeterTests.cpp
+
 static int failures = 0;
 static int checks   = 0;
 
@@ -146,6 +148,8 @@ int main()
         settingsFile.deleteFile();
         tmpDir.deleteRecursively();
     }
+
+    failures += runMeterTests (checks);
 
     std::cout << (failures == 0 ? "PASS " : "FAIL ")
               << (checks - failures) << '/' << checks << " checks\n";

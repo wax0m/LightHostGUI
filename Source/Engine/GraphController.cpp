@@ -115,6 +115,7 @@ void GraphController::rebuild()
     PluginWindow::closeAllCurrentlyOpenWindows();
     graph.clear();
     uidToNodeId.clear();
+    inputMeter = outputMeter = nullptr;
 
     using IOProcessor = AudioProcessorGraph::AudioGraphIOProcessor;
 
@@ -171,6 +172,8 @@ void GraphController::rebuild()
             graph.addConnection ({ { src->second, (int) c.getProperty ("srcCh") },
                                    { dst->second, (int) c.getProperty ("dstCh") } });
     }
+
+    insertMasterMeters();
 }
 
 void GraphController::captureStates()
@@ -283,4 +286,84 @@ AudioProcessorGraph::Node* GraphController::getNodeForUid (const String& uid) co
     if (it == uidToNodeId.end())
         return nullptr;
     return graph.getNodeForId (it->second);
+}
+
+//==============================================================================
+// Metering (runtime only). Meters are spliced into the live graph after the
+// document has been rebuilt, so they never appear in getChain()/uidToNodeId and
+// never touch persistence. Splicing preserves per-channel routing.
+
+void GraphController::insertMasterMeters()
+{
+    inputMeter  = nullptr;
+    outputMeter = nullptr;
+
+    const auto itIn  = uidToNodeId.find (document.getIoNodeUid (true));
+    const auto itOut = uidToNodeId.find (document.getIoNodeUid (false));
+
+    // Output meter first: measures exactly what reaches the audio output.
+    if (itOut != uidToNodeId.end())
+        outputMeter = spliceMeterBefore (itOut->second);
+
+    // Input meter: measures the dry signal leaving the audio input.
+    if (itIn != uidToNodeId.end())
+        inputMeter = spliceMeterAfter (itIn->second);
+}
+
+// Redirect every X -> target connection through a new meter: X -> meter -> target.
+MeterProcessor* GraphController::spliceMeterBefore (AudioProcessorGraph::NodeID target)
+{
+    auto meterNode = graph.addNode (std::make_unique<MeterProcessor>());
+    if (meterNode == nullptr)
+        return nullptr;
+
+    const auto meterId = meterNode->nodeID;
+
+    for (const auto& c : graph.getConnections())
+    {
+        if (c.destination.nodeID == target)
+        {
+            graph.removeConnection (c);
+            graph.addConnection ({ c.source, { meterId, c.destination.channelIndex } });
+        }
+    }
+
+    for (int ch = 0; ch < MeterTap::numChannels; ++ch)
+        graph.addConnection ({ { meterId, ch }, { target, ch } });
+
+    return dynamic_cast<MeterProcessor*> (meterNode->getProcessor());
+}
+
+// Redirect every source -> Y connection through a new meter: source -> meter -> Y.
+MeterProcessor* GraphController::spliceMeterAfter (AudioProcessorGraph::NodeID source)
+{
+    auto meterNode = graph.addNode (std::make_unique<MeterProcessor>());
+    if (meterNode == nullptr)
+        return nullptr;
+
+    const auto meterId = meterNode->nodeID;
+
+    for (const auto& c : graph.getConnections())
+    {
+        if (c.source.nodeID == source && c.destination.nodeID != meterId)
+        {
+            graph.removeConnection (c);
+            graph.addConnection ({ { meterId, c.source.channelIndex }, c.destination });
+        }
+    }
+
+    for (int ch = 0; ch < MeterTap::numChannels; ++ch)
+        graph.addConnection ({ { source, ch }, { meterId, ch } });
+
+    return dynamic_cast<MeterProcessor*> (meterNode->getProcessor());
+}
+
+const MeterTap* GraphController::getInputMeter() const noexcept
+{
+    return inputMeter != nullptr ? &inputMeter->getTap() : nullptr;
+}
+
+const MeterTap* GraphController::getOutputMeter() const noexcept
+{
+    return outputMeter != nullptr ? &outputMeter->getTap() : nullptr;
 }

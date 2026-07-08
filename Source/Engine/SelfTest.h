@@ -4,7 +4,9 @@
 //  Exercises the three behaviours that need real plugin instantiation:
 //    A. two instances of the SAME plugin coexist as distinct live nodes;
 //    B. a bypass flag survives a save() -> fresh loadFrom() restart;
-//    C. a pre-2026 legacy settings file migrates on first load, then persists.
+//    C. a pre-2026 legacy settings file migrates on first load, then persists;
+//    D. the master meters track real audio through the graph (move on noise,
+//       decay to zero on silence).
 //
 //  Used by both the LightHostRuntimeTests console target and the shipping app's
 //  `-run-selftest` command-line switch, so CI can verify the real binary.

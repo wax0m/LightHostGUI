@@ -88,6 +88,7 @@ if(LIGHTHOST_BUILD_TESTS)
 
     target_sources(LightHostTests PRIVATE
         Tests/GraphDocumentTests.cpp
+        Tests/MeterTests.cpp
         Source/Engine/GraphDocument.cpp
     )
 
