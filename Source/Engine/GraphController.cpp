@@ -116,6 +116,7 @@ void GraphController::rebuild()
     graph.clear();
     uidToNodeId.clear();
     inputMeter = outputMeter = nullptr;
+    nodeStrips.clear();
 
     using IOProcessor = AudioProcessorGraph::AudioGraphIOProcessor;
 
@@ -173,6 +174,7 @@ void GraphController::rebuild()
                                    { dst->second, (int) c.getProperty ("dstCh") } });
     }
 
+    insertNodeStrips();
     insertMasterMeters();
 }
 
@@ -366,4 +368,94 @@ const MeterTap* GraphController::getInputMeter() const noexcept
 const MeterTap* GraphController::getOutputMeter() const noexcept
 {
     return outputMeter != nullptr ? &outputMeter->getTap() : nullptr;
+}
+
+//==============================================================================
+// Per-node channel strips (M4). Like the master meters, strips are runtime nodes
+// spliced into the live graph after the document is built; the plugin instance
+// stays the node in uidToNodeId (so state capture / editors are unaffected).
+// Their gain/pan values persist in the document; the meter is runtime-only.
+
+void GraphController::insertNodeStrips()
+{
+    nodeStrips.clear();
+
+    ValueTree nodes = document.getNodes();
+    for (int i = 0; i < nodes.getNumChildren(); ++i)
+    {
+        ValueTree n = nodes.getChild (i);
+        if (n.getProperty ("type").toString() != GraphDocument::typePlugin)
+            continue;
+
+        const String uid = n.getProperty ("uid").toString();
+        const auto it = uidToNodeId.find (uid);
+        if (it == uidToNodeId.end())
+            continue;   // plugin missing/broken: no live node, so no strip
+
+        if (auto* strip = spliceStripAfter (it->second, document.getGain (uid), document.getPan (uid)))
+            nodeStrips[uid] = strip;
+    }
+}
+
+// source -> strip -> (old destinations of source). Mirrors spliceMeterAfter but
+// carries the node's gain/pan.
+NodeStripProcessor* GraphController::spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan)
+{
+    auto stripNode = graph.addNode (std::make_unique<NodeStripProcessor>());
+    if (stripNode == nullptr)
+        return nullptr;
+
+    const auto stripId = stripNode->nodeID;
+
+    for (const auto& c : graph.getConnections())
+    {
+        if (c.source.nodeID == source && c.destination.nodeID != stripId)
+        {
+            graph.removeConnection (c);
+            graph.addConnection ({ { stripId, c.source.channelIndex }, c.destination });
+        }
+    }
+
+    for (int ch = 0; ch < MeterTap::numChannels; ++ch)
+        graph.addConnection ({ { source, ch }, { stripId, ch } });
+
+    auto* strip = dynamic_cast<NodeStripProcessor*> (stripNode->getProcessor());
+    if (strip != nullptr)
+    {
+        strip->setGain (gain);
+        strip->setPan  (pan);
+    }
+    return strip;
+}
+
+void GraphController::setNodeGain (const String& uid, float gain)
+{
+    document.setGain (uid, gain);
+    const auto it = nodeStrips.find (uid);
+    if (it != nodeStrips.end() && it->second != nullptr)
+        it->second->setGain (gain);   // live, no rebuild
+}
+
+float GraphController::getNodeGain (const String& uid) const
+{
+    return document.getGain (uid);
+}
+
+void GraphController::setNodePan (const String& uid, float pan)
+{
+    document.setPan (uid, pan);
+    const auto it = nodeStrips.find (uid);
+    if (it != nodeStrips.end() && it->second != nullptr)
+        it->second->setPan (pan);   // live, no rebuild
+}
+
+float GraphController::getNodePan (const String& uid) const
+{
+    return document.getPan (uid);
+}
+
+const MeterTap* GraphController::getNodeMeter (const String& uid) const noexcept
+{
+    const auto it = nodeStrips.find (uid);
+    return (it != nodeStrips.end() && it->second != nullptr) ? &it->second->getTap() : nullptr;
 }

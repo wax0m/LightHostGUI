@@ -49,6 +49,10 @@ public:
     void setBypassed (const String& uid, bool);
     bool isBypassed (const String& uid) const;
 
+    void  setGain (const String& uid, float);
+    float getGain (const String& uid) const;   // linear, default 1.0 (0 dB)
+    void  setPan  (const String& uid, float);
+    float getPan  (const String& uid) const;    // -1..+1 balance, default 0
     void setPluginState (const String& uid, const String& base64);
     String getPluginState (const String& uid) const;
     void clearAllPluginStates();

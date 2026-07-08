@@ -11,6 +11,7 @@
 #include <iostream>
 
 int runMeterTests (int& checks);   // Tests/MeterTests.cpp
+int runStripTests (int& checks);   // Tests/StripTests.cpp
 
 static int failures = 0;
 static int checks   = 0;
@@ -150,6 +151,7 @@ int main()
     }
 
     failures += runMeterTests (checks);
+    failures += runStripTests (checks);
 
     std::cout << (failures == 0 ? "PASS " : "FAIL ")
               << (checks - failures) << '/' << checks << " checks\n";

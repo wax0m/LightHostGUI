@@ -386,6 +386,88 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test E — per-node channel strip: output gain scales the node meter and
+    //          hard pan mutes the opposite channel. The plugin is BYPASSED so the
+    //          strip sees a deterministic pass-through of the injected noise —
+    //          this isolates the strip's gain/pan DSP from plugin nondeterminism
+    //          (some real FX self-oscillate, cf. Test D). The strip is spliced
+    //          after the node regardless of the bypass flag.
+    //==========================================================================
+    std::cout << "\n[E] per-node channel strip (gain + pan)" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("strip");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        const String uid = controller.appendToChain (pA);
+        r.expect (uid.isNotEmpty(), "strip-test plugin instantiated");
+
+        controller.setBypassed (uid, true);   // deterministic pass-through into the strip
+
+        const MeterTap* nodeMeter = controller.getNodeMeter (uid);
+        r.expect (nodeMeter != nullptr, "per-node meter present for the plugin node");
+
+        Random rng (0x57a1b3);
+        AudioBuffer<float> block (2, blockSize);
+        MidiBuffer midi;
+
+        // Drive `count` blocks of white noise; report the max L/R peaks the node
+        // meter saw over that phase (resets each call).
+        auto drive = [&] (int count, float& maxL, float& maxR)
+        {
+            maxL = maxR = 0.0f;
+            for (int b = 0; b < count; ++b)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    float* d = block.getWritePointer (ch);
+                    for (int i = 0; i < blockSize; ++i)
+                        d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
+                }
+                midi.clear();
+                graph.processBlock (block, midi);
+                if (nodeMeter != nullptr)
+                {
+                    const auto lv = nodeMeter->read();
+                    maxL = jmax (maxL, lv.peak[0]);
+                    maxR = jmax (maxR, lv.peak[1]);
+                }
+            }
+        };
+
+        float uL, uR, hL, hR, pL, pR;
+
+        controller.setNodeGain (uid, 1.0f);
+        drive (40, uL, uR);                       // fills through the bypass latency
+        const float unityPeak = jmax (uL, uR);
+        r.expect (unityPeak > 0.0f, "node meter registers signal at unity gain");
+
+        controller.setNodeGain (uid, 0.5f);
+        r.expect (std::abs (controller.getNodeGain (uid) - 0.5f) < 1.0e-6f, "getNodeGain reflects the set value");
+        drive (40, hL, hR);
+        const float halfPeak = jmax (hL, hR);
+        r.expect (halfPeak > 0.0f && halfPeak < unityPeak * 0.7f, "node meter drops with lower gain (0.5)");
+
+        controller.setNodePan (uid, -1.0f);
+        r.expect (std::abs (controller.getNodePan (uid) + 1.0f) < 1.0e-6f, "getNodePan reflects the set value");
+        drive (40, pL, pR);
+        r.expect (pR < 1.0e-4f, "hard-left pan mutes the right meter channel");
+        r.expect (pL > 0.0f,    "hard-left pan keeps the left meter channel alive");
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();

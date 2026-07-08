@@ -15,6 +15,7 @@
 #include <vector>
 #include "GraphDocument.h"
 #include "MeterProcessor.h"
+#include "NodeStripProcessor.h"
 
 class GraphController
 {
@@ -53,6 +54,16 @@ public:
     const MeterTap* getInputMeter()  const noexcept;
     const MeterTap* getOutputMeter() const noexcept;
 
+    //==============================================================================
+    // Per-node channel strip (M4): output gain + stereo balance, plus the node's
+    // own post-strip meter. Gain/pan persist in the document; setters apply live
+    // (no rebuild). getNodeMeter is null for a missing plugin or before load.
+    void  setNodeGain (const String& uid, float gain);
+    float getNodeGain (const String& uid) const;
+    void  setNodePan  (const String& uid, float pan);
+    float getNodePan  (const String& uid) const;
+    const MeterTap* getNodeMeter (const String& uid) const noexcept;
+
     GraphDocument document;
 
 private:
@@ -66,11 +77,15 @@ private:
     MeterProcessor* spliceMeterBefore (AudioProcessorGraph::NodeID target);
     MeterProcessor* spliceMeterAfter  (AudioProcessorGraph::NodeID source);
 
+    void insertNodeStrips();
+    NodeStripProcessor* spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan);
+
     AudioProcessorGraph& graph;
     AudioPluginFormatManager& formatManager;
     std::map<String, AudioProcessorGraph::NodeID> uidToNodeId;
     MeterProcessor* inputMeter  = nullptr;   // owned by the graph node, not us
     MeterProcessor* outputMeter = nullptr;
+    std::map<String, NodeStripProcessor*> nodeStrips;   // plugin uid -> its strip (graph-owned)
 
     JUCE_DECLARE_NON_COPYABLE (GraphController)
 };

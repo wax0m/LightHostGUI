@@ -6,7 +6,9 @@
 //    B. a bypass flag survives a save() -> fresh loadFrom() restart;
 //    C. a pre-2026 legacy settings file migrates on first load, then persists;
 //    D. the master meters track real audio through the graph (move on noise,
-//       decay to zero on silence).
+//       decay to zero on silence);
+//    E. the per-node channel strip scales the node meter with output gain and
+//       mutes the opposite channel on hard pan.
 //
 //  Used by both the LightHostRuntimeTests console target and the shipping app's
 //  `-run-selftest` command-line switch, so CI can verify the real binary.

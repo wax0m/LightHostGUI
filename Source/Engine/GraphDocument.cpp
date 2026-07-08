@@ -15,6 +15,8 @@ namespace
     const Identifier idY           ("y");
     const Identifier idBypassed    ("bypassed");
     const Identifier idState       ("state");
+    const Identifier idGain        ("gain");
+    const Identifier idPan         ("pan");
     const Identifier idSrcUid      ("srcUid");
     const Identifier idSrcCh       ("srcCh");
     const Identifier idDstUid      ("dstUid");
@@ -131,6 +133,26 @@ void GraphDocument::setPluginState (const String& uid, const String& base64)
 String GraphDocument::getPluginState (const String& uid) const
 {
     return getNodeByUid (uid).getProperty (idState).toString();
+}
+
+void GraphDocument::setGain (const String& uid, float g)
+{
+    getNodeByUid (uid).setProperty (idGain, g, nullptr);
+}
+
+float GraphDocument::getGain (const String& uid) const
+{
+    return (float) getNodeByUid (uid).getProperty (idGain, 1.0f);
+}
+
+void GraphDocument::setPan (const String& uid, float pan)
+{
+    getNodeByUid (uid).setProperty (idPan, pan, nullptr);
+}
+
+float GraphDocument::getPan (const String& uid) const
+{
+    return (float) getNodeByUid (uid).getProperty (idPan, 0.0f);
 }
 
 void GraphDocument::clearAllPluginStates()
