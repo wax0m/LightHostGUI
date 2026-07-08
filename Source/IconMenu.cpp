@@ -10,9 +10,15 @@
 #include <JuceHeader.h>
 #include "IconMenu.hpp"
 #include "PluginWindow.h"
+#include "UI/MainWindow.h"
 #if JUCE_WINDOWS
 #include "Windows.h"
 #endif
+
+// Left-click menu id for "Show Editor Window". Safe: the fixed items use 1/2,
+// the per-plugin submenus use INDEX_* (>= 1,000,000), and KnownPluginList's
+// available-plugins ids start at 0x324503f4 — nothing else claims 3.
+static constexpr int kShowWindowMenuId = 3;
 
 class IconMenu::PluginListWindow : public DocumentWindow
 {
@@ -135,6 +141,7 @@ void IconMenu::timerCallback()
     {
         menu.addItem (1, "Preferences");
         menu.addItem (2, "Edit Plugins");
+        menu.addItem (kShowWindowMenuId, "Show Editor Window");
         menu.addSeparator();
         menu.addSectionHeader ("Active Plugins");
         // Active plugins
@@ -229,6 +236,9 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     // Reload
     if (id == 2)
         im->reloadPlugins();
+    // Show the main editor window
+    if (id == kShowWindowMenuId)
+        return im->showMainWindow();
     // Plugins
     if (id > 2)
     {
@@ -327,6 +337,18 @@ void IconMenu::reloadPlugins()
     if (pluginListWindow == nullptr)
         pluginListWindow = std::make_unique<PluginListWindow> (*this, formatManager);
     pluginListWindow->toFront (true);
+}
+
+void IconMenu::showMainWindow()
+{
+    if (mainWindow == nullptr)
+        mainWindow = std::make_unique<lighthost::ui::MainWindow> (controller);
+
+    #if JUCE_MAC
+    Process::setDockIconVisible (true);
+    #endif
+    mainWindow->setVisible (true);
+    mainWindow->toFront (true);
 }
 
 void IconMenu::removePluginsLackingInputOutput()

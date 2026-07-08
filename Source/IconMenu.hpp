@@ -12,6 +12,8 @@
 #include <JuceHeader.h>
 #include "Engine/GraphController.h"
 
+namespace lighthost::ui { class MainWindow; }
+
 ApplicationProperties& getAppProperties();
 
 class IconMenu : public SystemTrayIconComponent, private Timer, public ChangeListener
@@ -29,6 +31,7 @@ private:
     void timerCallback() override;
     void reloadPlugins();
     void showAudioSettings();
+    void showMainWindow();
     void removePluginsLackingInputOutput();
     void setIcon();
 
@@ -47,6 +50,7 @@ private:
 
     class PluginListWindow;
     std::unique_ptr<PluginListWindow> pluginListWindow;
+    std::unique_ptr<lighthost::ui::MainWindow> mainWindow;
 };
 
 #endif /* IconMenu_hpp */
