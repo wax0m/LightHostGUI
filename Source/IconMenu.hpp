@@ -32,6 +32,8 @@ private:
     void reloadPlugins();
     void showAudioSettings();
     void showMainWindow();
+    void showAddPluginMenu (juce::Point<int> screenPos);
+    void openEditorForUid (const String& uid);
     void removePluginsLackingInputOutput();
     void setIcon();
 

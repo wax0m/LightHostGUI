@@ -3,19 +3,21 @@
 namespace lighthost::ui
 {
 
-MainComponent::MainComponent (GraphController& controllerToPoll)
-    : controller (controllerToPoll)
+MainComponent::MainComponent (GraphController& controllerToPoll, Callbacks cb)
+    : controller (controllerToPoll), callbacks (std::move (cb)), canvas (controller)
 {
-    title.setText ("Light Host", juce::dontSendNotification);
-    title.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
-    title.setColour (juce::Label::textColourId, LightHostLookAndFeel::text());
-    title.setJustificationType (juce::Justification::centredLeft);
-    addAndMakeVisible (title);
+    addAndMakeVisible (titleBar);
+    titleBar.onPreferences = [this] { if (callbacks.preferences) callbacks.preferences(); };
+    titleBar.onEditPlugins = [this] { if (callbacks.editPlugins) callbacks.editPlugins(); };
 
-    addAndMakeVisible (inMeter);
-    addAndMakeVisible (outMeter);
+    canvas.onAddPlugin  = [this] (juce::Point<int> p) { if (callbacks.addPlugin)  callbacks.addPlugin (p); };
+    canvas.onOpenEditor = [this] (const juce::String& uid) { if (callbacks.openEditor) callbacks.openEditor (uid); };
 
-    setSize (420, 360);
+    viewport.setViewedComponent (&canvas, false);
+    viewport.setScrollBarsShown (false, true);   // horizontal only
+    addAndMakeVisible (viewport);
+
+    setSize (900, TitleBar::barHeight + CanvasView::canvasHeight);
     startTimerHz (60);
 }
 
@@ -24,44 +26,26 @@ MainComponent::~MainComponent()
     stopTimer();
 }
 
+void MainComponent::refreshChain()
+{
+    canvas.refresh();
+}
+
 void MainComponent::paint (juce::Graphics& g)
 {
-    g.fillAll (LightHostLookAndFeel::bg());
-
-    auto header = getLocalBounds().removeFromTop (48);
-    g.setColour (LightHostLookAndFeel::outline());
-    g.fillRect (header.removeFromBottom (1));
+    g.fillAll (LightHostLookAndFeel::appBg());
 }
 
 void MainComponent::resized()
 {
     auto r = getLocalBounds();
-
-    title.setBounds (r.removeFromTop (48).reduced (16, 0));
-
-    auto meters = r.reduced (16);
-    const int gap = 16;
-    const int w   = (meters.getWidth() - gap) / 2;
-
-    inMeter .setBounds (meters.removeFromLeft (w));
-    meters.removeFromLeft (gap);
-    outMeter.setBounds (meters);
+    titleBar.setBounds (r.removeFromTop (TitleBar::barHeight));
+    viewport.setBounds (r);
 }
 
 void MainComponent::timerCallback()
 {
-    // Re-fetch each tick: the tap pointers are replaced on every graph rebuild,
-    // and are null before the first load or if an IO node is absent.
-    feed (inMeter,  controller.getInputMeter());
-    feed (outMeter, controller.getOutputMeter());
-}
-
-void MainComponent::feed (MeterComponent& meter, const MeterTap* tap)
-{
-    if (tap != nullptr)
-        meter.setLevels (tap->read());
-    else
-        meter.setLevels ({});   // decay to silence when there is no live tap
+    canvas.tick();
 }
 
 } // namespace lighthost::ui

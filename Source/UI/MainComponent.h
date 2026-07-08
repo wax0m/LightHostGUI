@@ -1,18 +1,20 @@
 //
-//  MainComponent.h — the main window's content. Polls the controller's master
-//  meter taps on a 60 fps timer and paints master IN/OUT meters.
+//  MainComponent.h — the main window's content: title bar + a horizontally
+//  scrolling node canvas. Owns the 60 fps timer that advances the canvas meters
+//  and signal-flow animation. The one UI class that touches the engine, and only
+//  through GraphController's message-thread API — never the audio thread.
 //
-//  This is the one UI class that touches the engine, and only through
-//  GraphController's read-only meter accessors — it never mutates the graph and
-//  never calls onto the audio thread. It re-fetches the tap pointer every tick
-//  (the pointer changes on each graph rebuild), so it never caches a stale one.
+//  Host-level actions the canvas/title bar cannot do alone (add-plugin picker,
+//  open a native editor, preferences, plugin scan) are injected as callbacks by
+//  IconMenu so the UI stays decoupled from the tray/host plumbing.
 //
 
 #pragma once
 
 #include <JuceHeader.h>
 #include "../Engine/GraphController.h"
-#include "MeterComponent.h"
+#include "TitleBar.h"
+#include "CanvasView.h"
 
 namespace lighthost::ui
 {
@@ -21,21 +23,31 @@ class MainComponent : public juce::Component,
                       private juce::Timer
 {
 public:
-    explicit MainComponent (GraphController& controllerToPoll);
+    struct Callbacks
+    {
+        std::function<void (juce::Point<int> screenPos)> addPlugin;
+        std::function<void (const juce::String& uid)>    openEditor;
+        std::function<void()>                            preferences;
+        std::function<void()>                            editPlugins;
+    };
+
+    MainComponent (GraphController&, Callbacks);
     ~MainComponent() override;
+
+    void refreshChain();   // rebuild cards after an external chain change
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
     void timerCallback() override;
-    static void feed (MeterComponent&, const MeterTap*);
 
     GraphController& controller;
+    Callbacks callbacks;
 
-    juce::Label     title;
-    MeterComponent  inMeter  { "IN"  };
-    MeterComponent  outMeter { "OUT" };
+    TitleBar       titleBar;
+    juce::Viewport viewport;
+    CanvasView     canvas;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

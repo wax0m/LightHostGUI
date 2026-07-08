@@ -305,6 +305,9 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
                 im->controller.save (settings);
             }
         }
+        // Reflect any chain change in the open editor window.
+        if (im->mainWindow != nullptr)
+            im->mainWindow->refreshChain();
         // Update menu
         im->startTimer (50);
     }
@@ -342,13 +345,49 @@ void IconMenu::reloadPlugins()
 void IconMenu::showMainWindow()
 {
     if (mainWindow == nullptr)
-        mainWindow = std::make_unique<lighthost::ui::MainWindow> (controller);
+    {
+        lighthost::ui::MainComponent::Callbacks cb;
+        cb.addPlugin   = [this] (juce::Point<int> p) { showAddPluginMenu (p); };
+        cb.openEditor  = [this] (const String& uid)  { openEditorForUid (uid); };
+        cb.preferences = [this] { showAudioSettings(); };
+        cb.editPlugins = [this] { reloadPlugins(); };
+        mainWindow = std::make_unique<lighthost::ui::MainWindow> (controller, std::move (cb));
+    }
 
     #if JUCE_MAC
     Process::setDockIconVisible (true);
     #endif
     mainWindow->setVisible (true);
     mainWindow->toFront (true);
+}
+
+void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
+{
+    PopupMenu m;
+    KnownPluginList::addToMenu (m, knownPluginList.getTypes(), pluginSortMethod);
+
+    m.showMenuAsync (PopupMenu::Options()
+                        .withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }),
+        [this] (int r)
+        {
+            if (r <= 0)
+                return;
+            const auto types = knownPluginList.getTypes();
+            const int idx = KnownPluginList::getIndexChosenByMenu (types, r);
+            if (idx < 0)
+                return;
+            controller.appendToChain (types[idx]);
+            controller.save (*getAppProperties().getUserSettings());
+            if (mainWindow != nullptr)
+                mainWindow->refreshChain();
+        });
+}
+
+void IconMenu::openEditorForUid (const String& uid)
+{
+    if (auto* const node = controller.getNodeForUid (uid))
+        if (auto* const w = PluginWindow::getWindowFor (node, PluginWindow::Normal))
+            w->toFront (true);
 }
 
 void IconMenu::removePluginsLackingInputOutput()

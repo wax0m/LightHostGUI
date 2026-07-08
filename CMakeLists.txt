@@ -39,6 +39,9 @@ target_sources(LightHost PRIVATE
     Source/Engine/GraphController.cpp
     Source/Engine/SelfTest.cpp
     Source/UI/MainComponent.cpp
+    Source/UI/NodeCard.cpp
+    Source/UI/CanvasView.cpp
+    Source/UI/TitleBar.cpp
 )
 
 # Tray icons referenced in code as BinaryData::menu_icon_png / menu_icon_white_png

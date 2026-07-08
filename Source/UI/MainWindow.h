@@ -17,17 +17,19 @@ namespace lighthost::ui
 class MainWindow : public juce::DocumentWindow
 {
 public:
-    explicit MainWindow (GraphController& controller)
+    MainWindow (GraphController& controller, MainComponent::Callbacks callbacks)
         : juce::DocumentWindow ("Light Host",
-                                LightHostLookAndFeel::bg(),
+                                LightHostLookAndFeel::appBg(),
                                 juce::DocumentWindow::minimiseButton | juce::DocumentWindow::closeButton)
     {
         setLookAndFeel (&lookAndFeel);
         setUsingNativeTitleBar (true);
-        setContentOwned (new MainComponent (controller), true);
+
+        content = new MainComponent (controller, std::move (callbacks));
+        setContentOwned (content, true);
         setResizable (true, false);
-        setResizeLimits (360, 300, 1200, 900);
-        centreWithSize (getWidth(), getHeight());
+        setResizeLimits (520, 320, 2400, 900);
+        centreWithSize (juce::jmin (getWidth(), 1180), getHeight());
     }
 
     ~MainWindow() override
@@ -35,6 +37,8 @@ public:
         clearContentComponent();
         setLookAndFeel (nullptr);
     }
+
+    void refreshChain() { if (content != nullptr) content->refreshChain(); }
 
     // Hide to tray instead of quitting — the engine keeps running in the background.
     void closeButtonPressed() override
@@ -44,6 +48,7 @@ public:
 
 private:
     LightHostLookAndFeel lookAndFeel;
+    MainComponent* content = nullptr;   // owned by the DocumentWindow content
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
 };
