@@ -44,14 +44,21 @@ public:
 
 private:
     void applyBypassLook();
+    void setupGainPanKnobs();                                    // host channel strip
+    void setupPluginParamKnobs (const std::vector<params::ParamInfo>&);  // hosted-plugin params
+    void refreshParamReadouts();                                 // poll .value/.text on the timer
 
     GraphController& controller;
     juce::String uid, name, format;
     bool bypassed = false;
     bool missing  = false;
 
-    KnobStrip gainKnob { "Gain", 0.0, 2.0, 1.0 };
-    KnobStrip panKnob  { "Pan", -1.0, 1.0, 0.0 };
+    // The two knob columns. They drive either the host gain/pan strip or the first
+    // two curated plugin parameters — paramIndices decides (empty => host mode).
+    KnobStrip knobA { "Gain", 0.0, 2.0, 1.0 };
+    KnobStrip knobB { "Pan", -1.0, 1.0, 0.0 };
+    std::vector<int> paramIndices;   // knob slot -> plugin param index
+    int paramPollCounter = 0;
     SegmentedMeter meterL, meterR;
 
     juce::Rectangle<int> bypassRect, removeRect, statusDotRect;

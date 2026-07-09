@@ -36,6 +36,16 @@ public:
 
     void setValueQuiet (double v) { slider.setValue (v, juce::dontSendNotification); repaint(); }
 
+    // Re-label / re-range the column (used when a knob is repurposed from the
+    // host gain/pan strip to a hosted-plugin parameter).
+    void setLabel (const juce::String& t) { label = t; repaint(); }
+    void setRange (double lo, double hi)  { slider.setRange (lo, hi); }
+
+    // Override the readout with a plugin-supplied string (its getCurrentValueAsText);
+    // clearReadout() reverts to the `format` callback.
+    void setReadout (const juce::String& t) { overrideText = t; hasOverride = true; repaint(); }
+    void clearReadout() { hasOverride = false; }
+
     void resized() override
     {
         auto r = getLocalBounds();
@@ -56,13 +66,17 @@ public:
 
         g.setColour (LightHostLookAndFeel::textPrimary());
         g.setFont (LightHostLookAndFeel::mono (11.0f));
-        const juce::String v = format ? format (slider.getValue()) : juce::String (slider.getValue(), 2);
+        const juce::String v = hasOverride ? overrideText
+                             : format      ? format (slider.getValue())
+                                           : juce::String (slider.getValue(), 2);
         g.drawText (v, valueArea, juce::Justification::centred);
     }
 
 private:
     juce::Slider slider;
     juce::String label;
+    juce::String overrideText;
+    bool hasOverride = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KnobStrip)
 };

@@ -15,34 +15,104 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
     if (format.isEmpty())
         format = missing ? "missing" : "VST3";
 
-    addAndMakeVisible (gainKnob);
-    addAndMakeVisible (panKnob);
+    addAndMakeVisible (knobA);
+    addAndMakeVisible (knobB);
     addAndMakeVisible (meterL);
     addAndMakeVisible (meterR);
 
-    gainKnob.setValueQuiet (controller.getNodeGain (uid));
-    gainKnob.format = [] (double v) { return v <= 0.0001 ? juce::String ("-inf")
-                                        : juce::Decibels::toString ((float) juce::Decibels::gainToDecibels (v), 1, -60.0f); };
-    gainKnob.onValueChange = [this] (double v) { controller.setNodeGain (uid, (float) v); };
-
-    panKnob.setValueQuiet (controller.getNodePan (uid));
-    panKnob.format = [] (double v)
+    // A MISSING plugin has no live instance to drive: show no knobs (just the
+    // header + inert meter). Otherwise prefer the hosted plugin's own parameters
+    // (Freq, Gain, Ratio, …) on the card, falling back to the host gain/pan strip
+    // when the plugin exposes none.
+    if (missing)
     {
-        const int p = juce::roundToInt (std::abs (v) * 100.0);
-        if (p == 0) return juce::String ("C");
-        return (v < 0 ? juce::String ("L") : juce::String ("R")) + juce::String (p);
-    };
-    panKnob.onValueChange = [this] (double v) { controller.setNodePan (uid, (float) v); };
+        knobA.setVisible (false);
+        knobB.setVisible (false);
+    }
+    else if (auto cardParams = controller.getNodeCardParameters (uid, 2); ! cardParams.empty())
+        setupPluginParamKnobs (cardParams);
+    else
+        setupGainPanKnobs();
 
     applyBypassLook();
     setSize (cardWidth, cardHeight);
 }
 
+void NodeCard::setupGainPanKnobs()
+{
+    knobA.setLabel ("Gain");
+    knobA.setRange (0.0, 2.0);
+    knobA.clearReadout();
+    knobA.setValueQuiet (controller.getNodeGain (uid));
+    knobA.format = [] (double v) { return v <= 0.0001 ? juce::String ("-inf")
+                                     : juce::Decibels::toString ((float) juce::Decibels::gainToDecibels (v), 1, -60.0f); };
+    knobA.onValueChange = [this] (double v) { controller.setNodeGain (uid, (float) v); };
+
+    knobB.setLabel ("Pan");
+    knobB.setRange (-1.0, 1.0);
+    knobB.clearReadout();
+    knobB.setValueQuiet (controller.getNodePan (uid));
+    knobB.format = [] (double v)
+    {
+        const int p = juce::roundToInt (std::abs (v) * 100.0);
+        if (p == 0) return juce::String ("C");
+        return (v < 0 ? juce::String ("L") : juce::String ("R")) + juce::String (p);
+    };
+    knobB.onValueChange = [this] (double v) { controller.setNodePan (uid, (float) v); };
+    knobB.setVisible (true);
+}
+
+void NodeCard::setupPluginParamKnobs (const std::vector<params::ParamInfo>& ps)
+{
+    KnobStrip* slots[2] = { &knobA, &knobB };
+    for (size_t i = 0; i < ps.size() && i < 2; ++i)
+    {
+        const auto& p = ps[i];
+        paramIndices.push_back (p.index);
+
+        auto* k = slots[i];
+        k->format = nullptr;                 // readout comes from the plugin's own text
+        k->setLabel (p.name);
+        k->setRange (0.0, 1.0);              // normalized param value maps straight to the dial
+        k->setValueQuiet (p.value);
+        k->setReadout (p.text.isNotEmpty() ? p.text : juce::String (p.value, 2));
+
+        const int idx = p.index;
+        k->onValueChange = [this, idx] (double v) { controller.setNodeParameter (uid, idx, (float) v); };
+    }
+
+    // A plugin exposing a single parameter leaves the second column empty.
+    knobB.setVisible (paramIndices.size() > 1);
+}
+
+void NodeCard::refreshParamReadouts()
+{
+    if (paramIndices.empty())       // host gain/pan mode: nothing external to poll
+        return;
+
+    // ~10 Hz is plenty for a text readout and avoids re-collecting the plugin's
+    // (possibly hundreds of) parameters every animation frame.
+    if (++paramPollCounter < 6)
+        return;
+    paramPollCounter = 0;
+
+    const auto ps = controller.getNodeCardParameters (uid, (int) paramIndices.size());
+    KnobStrip* slots[2] = { &knobA, &knobB };
+    for (size_t i = 0; i < ps.size() && i < 2; ++i)
+    {
+        auto* k = slots[i];
+        if (k->getSlider().isMouseButtonDown())   // don't fight the user mid-drag
+            continue;
+        k->setValueQuiet (ps[i].value);
+        k->setReadout (ps[i].text.isNotEmpty() ? ps[i].text : juce::String (ps[i].value, 2));
+    }
+}
+
 void NodeCard::applyBypassLook()
 {
     const float a = bypassed ? 0.42f : 1.0f;
-    gainKnob.setAlpha (a);
-    panKnob.setAlpha (a);
+    knobA.setAlpha (a);
+    knobB.setAlpha (a);
     meterL.setAlpha (a);
     meterR.setAlpha (a);
 }
@@ -60,6 +130,8 @@ void NodeCard::updateMeters()
         meterL.setLevel (0.0f);
         meterR.setLevel (0.0f);
     }
+
+    refreshParamReadouts();
 }
 
 void NodeCard::resized()
@@ -84,11 +156,18 @@ void NodeCard::resized()
     }
 
     r.removeFromTop (6);
-    const int kgap = 14;
-    const int kw = (r.getWidth() - kgap) / 2;
-    gainKnob.setBounds (r.removeFromLeft (kw));
-    r.removeFromLeft (kgap);
-    panKnob.setBounds (r);
+    if (! knobB.isVisible())        // single-parameter plugin: centre the lone knob
+    {
+        knobA.setBounds (r);
+    }
+    else
+    {
+        const int kgap = 14;
+        const int kw = (r.getWidth() - kgap) / 2;
+        knobA.setBounds (r.removeFromLeft (kw));
+        r.removeFromLeft (kgap);
+        knobB.setBounds (r);
+    }
 }
 
 void NodeCard::paint (juce::Graphics& g)
