@@ -94,6 +94,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/GraphDocumentTests.cpp
         Tests/MeterTests.cpp
         Tests/StripTests.cpp
+        Tests/ParamTests.cpp
         Source/Engine/GraphDocument.cpp
     )
 

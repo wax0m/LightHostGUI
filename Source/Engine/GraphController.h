@@ -16,6 +16,7 @@
 #include "GraphDocument.h"
 #include "MeterProcessor.h"
 #include "NodeStripProcessor.h"
+#include "PluginParameters.h"
 
 class GraphController
 {
@@ -63,6 +64,14 @@ public:
     void  setNodePan  (const String& uid, float pan);
     float getNodePan  (const String& uid) const;
     const MeterTap* getNodeMeter (const String& uid) const noexcept;
+
+    //==============================================================================
+    // Plugin parameter bridge (M5): read/drive the hosted plugin's own parameters
+    // (Freq, Gain, Ratio, …). Empty / no-op for a missing plugin. Message thread.
+    std::vector<lighthost::params::ParamInfo> getNodeParameters (const String& uid, bool automatableOnly = false) const;
+    std::vector<lighthost::params::ParamInfo> getNodeCardParameters (const String& uid, int count) const;
+    void  setNodeParameter (const String& uid, int index, float normalized);
+    float getNodeParameter (const String& uid, int index) const;
 
     GraphDocument document;
 

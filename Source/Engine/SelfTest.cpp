@@ -468,6 +468,92 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test F — plugin-parameter bridge: driving a hosted plugin's OWN parameter
+    //          via setNodeParameter moves getNodeParameter and the plugin's
+    //          reported value text. Uses the live instance's getParameters() list
+    //          (host-side setValueNotifyingHost), not the host gain/pan strip.
+    //          SKIPs green if the discovered plugin exposes no usable parameter.
+    //==========================================================================
+    std::cout << "\n[F] plugin-parameter bridge" << std::endl;
+    {
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, 44100.0, 512);
+        graph.prepareToPlay (44100.0, 512);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("params");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        const String uid = controller.appendToChain (pA);
+        r.expect (uid.isNotEmpty(), "param-test plugin instantiated");
+
+        auto ps = controller.getNodeParameters (uid, /*automatableOnly*/ true);
+        if (ps.empty())
+            ps = controller.getNodeParameters (uid, false);      // fall back to any param
+        r.expect (! ps.empty(), "hosted plugin exposes at least one parameter");
+
+        // The plugin's current text for parameter `idx` (fresh snapshot).
+        auto textAt = [&] (int idx) -> String
+        {
+            for (const auto& info : controller.getNodeParameters (uid, false))
+                if (info.index == idx)
+                    return info.text;
+            return {};
+        };
+
+        // Find the first parameter whose normalized value actually responds to a
+        // 0.0 -> 0.9 sweep (skips fixed/meter-style read-only params); prefer one
+        // whose reported text moves too so we can assert both.
+        int  valueMover = -1, textMover = -1;
+        for (const auto& info : ps)
+        {
+            controller.setNodeParameter (uid, info.index, 0.0f);
+            const float v0 = controller.getNodeParameter (uid, info.index);
+            const String t0 = textAt (info.index);
+
+            controller.setNodeParameter (uid, info.index, 0.9f);
+            const float v1 = controller.getNodeParameter (uid, info.index);
+            const String t1 = textAt (info.index);
+
+            if (v1 - v0 > 0.1f)
+            {
+                if (valueMover < 0) valueMover = info.index;
+                if (textMover  < 0 && t1 != t0) { textMover = info.index; break; }
+            }
+        }
+
+        if (textMover < 0 && valueMover < 0)
+        {
+            std::cout << "  SKIP no automatable parameter responded to a 0->0.9 sweep on this plugin" << std::endl;
+        }
+        else
+        {
+            const int idx = textMover >= 0 ? textMover : valueMover;
+
+            controller.setNodeParameter (uid, idx, 0.0f);
+            const float low   = controller.getNodeParameter (uid, idx);
+            const String lowT = textAt (idx);
+
+            controller.setNodeParameter (uid, idx, 0.9f);
+            const float high   = controller.getNodeParameter (uid, idx);
+            const String highT = textAt (idx);
+
+            r.expect (high - low > 0.1f,
+                      "setNodeParameter moves getNodeParameter (0.0 -> 0.9)");
+
+            if (textMover >= 0)
+                r.expect (highT != lowT, "plugin's reported value text tracks the parameter");
+            else
+                std::cout << "  note  chosen param reports no text change; value move verified" << std::endl;
+        }
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();

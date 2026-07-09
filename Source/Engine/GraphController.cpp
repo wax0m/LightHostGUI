@@ -459,3 +459,38 @@ const MeterTap* GraphController::getNodeMeter (const String& uid) const noexcept
     const auto it = nodeStrips.find (uid);
     return (it != nodeStrips.end() && it->second != nullptr) ? &it->second->getTap() : nullptr;
 }
+
+//==============================================================================
+// Plugin parameter bridge (M5). Delegates to the testable helpers in
+// PluginParameters.h against the node's live plugin instance.
+
+std::vector<lighthost::params::ParamInfo> GraphController::getNodeParameters (const String& uid, bool automatableOnly) const
+{
+    if (auto* node = getNodeForUid (uid))
+        if (auto* proc = node->getProcessor())
+            return lighthost::params::collect (*proc, automatableOnly);
+    return {};
+}
+
+std::vector<lighthost::params::ParamInfo> GraphController::getNodeCardParameters (const String& uid, int count) const
+{
+    if (auto* node = getNodeForUid (uid))
+        if (auto* proc = node->getProcessor())
+            return lighthost::params::curate (*proc, count);
+    return {};
+}
+
+void GraphController::setNodeParameter (const String& uid, int index, float normalized)
+{
+    if (auto* node = getNodeForUid (uid))
+        if (auto* proc = node->getProcessor())
+            lighthost::params::setValue (*proc, index, normalized);   // live, no rebuild
+}
+
+float GraphController::getNodeParameter (const String& uid, int index) const
+{
+    if (auto* node = getNodeForUid (uid))
+        if (auto* proc = node->getProcessor())
+            return lighthost::params::getValue (*proc, index);
+    return 0.0f;
+}
