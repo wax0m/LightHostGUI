@@ -14,7 +14,7 @@ MainComponent::MainComponent (GraphController& controllerToPoll, Callbacks cb)
     canvas.onOpenEditor = [this] (const juce::String& uid) { if (callbacks.openEditor) callbacks.openEditor (uid); };
 
     viewport.setViewedComponent (&canvas, false);
-    viewport.setScrollBarsShown (false, true);   // horizontal only
+    viewport.setScrollBarsShown (true, true);     // free 2D placement: both axes
     addAndMakeVisible (viewport);
 
     setSize (900, TitleBar::barHeight + CanvasView::canvasHeight);

@@ -305,6 +305,30 @@ void NodeCard::mouseDown (const juce::MouseEvent& e)
         if (onRemove) onRemove (uid);
         return;
     }
+
+    // Anywhere else on the card body starts a node move. (Knob drags never reach
+    // here — the KnobStrip child components capture their own mouse events.)
+    nodeDragActive = true;
+    lastParentPos  = e.getEventRelativeTo (getParentComponent()).getPosition();
+}
+
+void NodeCard::mouseDrag (const juce::MouseEvent& e)
+{
+    if (! nodeDragActive)
+        return;
+    const auto p = e.getEventRelativeTo (getParentComponent()).getPosition();
+    const auto delta = p - lastParentPos;
+    lastParentPos = p;
+    if (onDragMove) onDragMove (uid, delta);
+}
+
+void NodeCard::mouseUp (const juce::MouseEvent&)
+{
+    if (nodeDragActive)
+    {
+        nodeDragActive = false;
+        if (onDragEnd) onDragEnd (uid);
+    }
 }
 
 void NodeCard::mouseDoubleClick (const juce::MouseEvent& e)

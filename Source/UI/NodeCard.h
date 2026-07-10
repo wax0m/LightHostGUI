@@ -37,9 +37,17 @@ public:
     std::function<void (const juce::String&)> onRemove;
     std::function<void (const juce::String&)> onOpenEditor;
 
+    // Canvas-supplied node move: dragging the card BODY (not a knob or a header
+    // control) reports a pixel delta in parent (canvas) coords, then a drag-end so
+    // the canvas can persist the normalized position.
+    std::function<void (const juce::String&, juce::Point<int> delta)> onDragMove;
+    std::function<void (const juce::String&)> onDragEnd;
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
@@ -68,6 +76,10 @@ private:
 
     juce::Rectangle<int> bypassRect, removeRect, statusDotRect, midiRect;
     bool removeHot = false;
+
+    // Body-drag (node move) state.
+    bool nodeDragActive = false;
+    juce::Point<int> lastParentPos;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NodeCard)
 };
