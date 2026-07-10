@@ -636,3 +636,18 @@ bool GraphController::nodeAcceptsMidi (const String& uid) const
             return p->acceptsMidi();
     return false;
 }
+
+//==============================================================================
+void GraphController::loadDocument (const GraphDocument& doc)
+{
+    document.state = doc.state.createCopy();   // deep copy: never share the store's tree
+    rebuild();
+}
+
+GraphDocument GraphController::snapshotDocument()
+{
+    captureStates();                           // fold live plugin states into the document
+    GraphDocument g;
+    g.state = document.state.createCopy();
+    return g;
+}

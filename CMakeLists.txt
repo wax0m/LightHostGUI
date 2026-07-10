@@ -92,11 +92,13 @@ if(LIGHTHOST_BUILD_TESTS)
 
     target_sources(LightHostTests PRIVATE
         Tests/GraphDocumentTests.cpp
+        Source/Engine/PresetStore.cpp
         Tests/MeterTests.cpp
         Tests/StripTests.cpp
         Tests/ParamTests.cpp
         Tests/RoutingTests.cpp
         Tests/MidiTests.cpp
+        Tests/PresetTests.cpp
         Source/Engine/GraphDocument.cpp
     )
 

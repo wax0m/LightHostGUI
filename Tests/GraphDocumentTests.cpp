@@ -15,6 +15,7 @@ int runStripTests (int& checks);   // Tests/StripTests.cpp
 int runParamTests (int& checks);   // Tests/ParamTests.cpp
 int runRoutingTests (int& checks); // Tests/RoutingTests.cpp
 int runMidiTests (int& checks);    // Tests/MidiTests.cpp
+int runPresetTests (int& checks);  // Tests/PresetTests.cpp
 
 static int failures = 0;
 static int checks   = 0;
@@ -158,6 +159,7 @@ int main()
     failures += runParamTests (checks);
     failures += runRoutingTests (checks);
     failures += runMidiTests (checks);
+    failures += runPresetTests (checks);
 
     std::cout << (failures == 0 ? "PASS " : "FAIL ")
               << (checks - failures) << '/' << checks << " checks\n";

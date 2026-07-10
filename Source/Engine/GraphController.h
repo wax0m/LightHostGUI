@@ -73,6 +73,11 @@ public:
     void disconnect (const String& srcUid, int srcCh, const String& dstUid, int dstCh);
     bool canConnect (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const;
     std::vector<Connection> getConnections() const;
+
+    // Presets: apply a stored graph document (deep copy + rebuild), or snapshot
+    // the live one (capturing plugin states) for saving into a preset.
+    void loadDocument (const GraphDocument&);
+    GraphDocument snapshotDocument();
     bool isLinearChain() const;   // tray serial ops are only offered when true
 
     // MIDI routing (M7): host MIDI reaches plugins that acceptsMidi() and whose
