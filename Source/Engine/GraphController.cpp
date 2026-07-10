@@ -98,15 +98,9 @@ void GraphController::rewriteChainConnections (const std::vector<String>& chainU
         document.addConnection (chainUids[i], 0, chainUids[i + 1], 0);
         document.addConnection (chainUids[i], 1, chainUids[i + 1], 1);
     }
-
-    // Keep default canvas positions tidy: spread plugins between the IO nodes.
-    const auto pluginCount = chainUids.size() > 2 ? chainUids.size() - 2 : 0;
-    for (size_t i = 1; i + 1 < chainUids.size(); ++i)
-    {
-        ValueTree node = document.getNodeByUid (chainUids[i]);
-        node.setProperty ("x", 0.1f + 0.8f * (float) i / (float) (pluginCount + 1), nullptr);
-        node.setProperty ("y", 0.5f, nullptr);
-    }
+    // NOTE: node canvas positions are user-owned (dragged on the canvas, persisted
+    // per node). Do NOT rewrite them here — chain edits (add/remove/move) must
+    // leave every existing node exactly where the user put it.
 }
 
 //==============================================================================
@@ -221,7 +215,23 @@ String GraphController::appendToChain (const PluginDescription& desc)
 {
     captureStates();
     std::vector<String> chain = getChainUids();
-    const String uid = document.addPluginNode (desc, 0.5f, 0.5f);
+
+    // Place the new node to the right of the current rightmost plugin so it does
+    // not stack on top of existing cards (positions are otherwise user-owned).
+    float maxX = 0.15f;
+    bool  anyPlugin = false;
+    ValueTree nodes = document.getNodes();
+    for (int i = 0; i < nodes.getNumChildren(); ++i)
+    {
+        const auto n = nodes.getChild (i);
+        if (n.getProperty ("type").toString() == GraphDocument::typePlugin)
+        {
+            maxX = jmax (maxX, (float) n.getProperty ("x", 0.15f));
+            anyPlugin = true;
+        }
+    }
+    const float newX = anyPlugin ? jmin (0.9f, maxX + 0.12f) : 0.3f;
+    const String uid = document.addPluginNode (desc, newX, 0.5f);
     chain.insert (chain.end() - 1, uid);   // before audioOut
     rewriteChainConnections (chain);
     rebuild();

@@ -20,7 +20,7 @@ public:
     MainWindow (GraphController& controller, const PresetStore& store, MainComponent::Callbacks callbacks)
         : juce::DocumentWindow ("Light Host",
                                 LightHostLookAndFeel::appBg(),
-                                juce::DocumentWindow::minimiseButton | juce::DocumentWindow::closeButton)
+                                juce::DocumentWindow::minimiseButton | juce::DocumentWindow::maximiseButton | juce::DocumentWindow::closeButton)
     {
         setLookAndFeel (&lookAndFeel);
         setUsingNativeTitleBar (true);

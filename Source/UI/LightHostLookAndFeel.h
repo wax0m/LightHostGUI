@@ -165,8 +165,11 @@ public:
     static void applyKnobStyle (juce::Slider& s)
     {
         s.setSliderStyle (juce::Slider::RotaryVerticalDrag);
-        s.setRotaryParameters (juce::MathConstants<float>::pi * -0.75f,
-                               juce::MathConstants<float>::pi *  0.75f, true);
+        // JUCE requires both angles >= 0 and < 4*pi. This is the positive-wrapped
+        // form of the spec's -135 deg..+135 deg sweep (identical pointer directions),
+        // gap at the bottom. Using negative radians trips a jassert in Slider.
+        s.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f,
+                               juce::MathConstants<float>::pi * 2.75f, true);
         s.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         s.setVelocityBasedMode (false);
     }

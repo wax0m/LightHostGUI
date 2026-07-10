@@ -155,12 +155,12 @@ void TitleBar::showSettingsMenu()
 {
     juce::PopupMenu m;
     m.addSectionHeader ("LIGHTHOST");
-    m.addItem (1, "Preferences…");
-    m.addItem (2, "Edit Plug-ins…");
+    m.addItem (1, juce::String::fromUTF8 ("Preferences…"));
+    m.addItem (2, juce::String::fromUTF8 ("Edit Plug-ins…"));
     m.addSeparator();
     m.addSectionHeader ("PRESET");
     m.addItem (3, "Save Preset");
-    m.addItem (4, "Rename Preset…");
+    m.addItem (4, juce::String::fromUTF8 ("Rename Preset…"));
     m.addItem (5, "Delete Preset");
 
     settingsHot = true;

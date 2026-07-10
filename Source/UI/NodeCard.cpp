@@ -260,7 +260,7 @@ void NodeCard::paint (juce::Graphics& g)
         }
         g.setColour (removeHot ? LightHostLookAndFeel::removeHover() : LightHostLookAndFeel::textTert());
         g.setFont (LightHostLookAndFeel::display (16.0f));
-        g.drawText ("×", removeRect, juce::Justification::centred);
+        g.drawText (juce::String::fromUTF8 ("×"), removeRect, juce::Justification::centred);
     }
 
     // Divider.
