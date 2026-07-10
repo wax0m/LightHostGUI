@@ -66,6 +66,19 @@ public:
     const MeterTap* getNodeMeter (const String& uid) const noexcept;
 
     //==============================================================================
+    // Arbitrary routing (M6). connect/disconnect validate + edit the document, then
+    // re-wire the LIVE graph WITHOUT reloading plugins. Node positions are GUI-only.
+    struct Connection { String srcUid; int srcCh; String dstUid; int dstCh; };
+    bool connect    (const String& srcUid, int srcCh, const String& dstUid, int dstCh);
+    void disconnect (const String& srcUid, int srcCh, const String& dstUid, int dstCh);
+    bool canConnect (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const;
+    std::vector<Connection> getConnections() const;
+    bool isLinearChain() const;   // tray serial ops are only offered when true
+    void  setNodePosition (const String& uid, float x, float y);
+    float getNodeX (const String& uid) const;
+    float getNodeY (const String& uid) const;
+
+    //==============================================================================
     // Plugin parameter bridge (M5): read/drive the hosted plugin's own parameters
     // (Freq, Gain, Ratio, …). Empty / no-op for a missing plugin. Message thread.
     std::vector<lighthost::params::ParamInfo> getNodeParameters (const String& uid, bool automatableOnly = false) const;
@@ -77,6 +90,7 @@ public:
 
 private:
     void rebuild();                          // document -> live graph
+    void rewireConnections();                // re-wire live graph from doc WITHOUT reloading plugins
     void captureStates();                    // live plugin states -> document
     std::vector<String> getChainUids() const;            // audioIn .. audioOut, doc order
     void rewriteChainConnections (const std::vector<String>& chainUids);

@@ -494,3 +494,83 @@ float GraphController::getNodeParameter (const String& uid, int index) const
             return lighthost::params::getValue (*proc, index);
     return 0.0f;
 }
+
+//==============================================================================
+// Arbitrary routing (M6). Re-derive only the connection topology + runtime
+// strip/meter nodes from the document, keeping plugin/IO nodes (and their live
+// instances) intact — so editing a wire never reloads a plugin.
+
+void GraphController::rewireConnections()
+{
+    // Drop the runtime strip/meter nodes; they get re-spliced below. Plugin/IO
+    // nodes (in uidToNodeId) are left untouched.
+    std::vector<AudioProcessorGraph::NodeID> runtimeNodes;
+    for (auto* node : graph.getNodes())
+        if (dynamic_cast<NodeStripProcessor*> (node->getProcessor()) != nullptr
+         || dynamic_cast<MeterProcessor*>     (node->getProcessor()) != nullptr)
+            runtimeNodes.push_back (node->nodeID);
+
+    for (auto id : runtimeNodes)
+        graph.removeNode (id);
+
+    for (const auto& c : graph.getConnections())
+        graph.removeConnection (c);
+
+    ValueTree connections = document.getConnections();
+    for (int i = 0; i < connections.getNumChildren(); ++i)
+    {
+        ValueTree c = connections.getChild (i);
+        const auto src = uidToNodeId.find (c.getProperty ("srcUid").toString());
+        const auto dst = uidToNodeId.find (c.getProperty ("dstUid").toString());
+        if (src != uidToNodeId.end() && dst != uidToNodeId.end())
+            graph.addConnection ({ { src->second, (int) c.getProperty ("srcCh") },
+                                   { dst->second, (int) c.getProperty ("dstCh") } });
+    }
+
+    insertNodeStrips();
+    insertMasterMeters();
+}
+
+bool GraphController::connect (const String& srcUid, int srcCh, const String& dstUid, int dstCh)
+{
+    if (! document.canAddConnection (srcUid, srcCh, dstUid, dstCh))
+        return false;
+
+    document.addConnection (srcUid, srcCh, dstUid, dstCh);
+    rewireConnections();
+    return true;
+}
+
+void GraphController::disconnect (const String& srcUid, int srcCh, const String& dstUid, int dstCh)
+{
+    document.removeConnection (srcUid, srcCh, dstUid, dstCh);
+    rewireConnections();
+}
+
+bool GraphController::canConnect (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const
+{
+    return document.canAddConnection (srcUid, srcCh, dstUid, dstCh);
+}
+
+std::vector<GraphController::Connection> GraphController::getConnections() const
+{
+    std::vector<Connection> out;
+    ValueTree conns = document.getConnections();
+    for (int i = 0; i < conns.getNumChildren(); ++i)
+    {
+        ValueTree c = conns.getChild (i);
+        out.push_back ({ c.getProperty ("srcUid").toString(), (int) c.getProperty ("srcCh"),
+                         c.getProperty ("dstUid").toString(), (int) c.getProperty ("dstCh") });
+    }
+    return out;
+}
+
+void GraphController::setNodePosition (const String& uid, float x, float y)
+{
+    document.setNodePosition (uid, x, y);   // GUI-only; no audio change, no rewire
+}
+
+float GraphController::getNodeX (const String& uid) const { return document.getNodeX (uid); }
+float GraphController::getNodeY (const String& uid) const { return document.getNodeY (uid); }
+
+bool GraphController::isLinearChain() const { return document.isLinearChain(); }

@@ -144,6 +144,12 @@ void IconMenu::timerCallback()
         menu.addItem (kShowWindowMenuId, "Show Editor Window");
         menu.addSeparator();
         menu.addSectionHeader ("Active Plugins");
+        // The serial-chain ops (add/delete/move) rewrite the graph as a straight
+        // chain, which would clobber parallel routing made on the canvas — so
+        // they are only offered while the graph is still a linear chain.
+        const bool linear = controller.isLinearChain();
+        if (! linear)
+            menu.addItem (4, "Chain edits disabled: graph has parallel routing - edit on the canvas.", false);
         // Active plugins
         const auto chain = controller.getChain();
         for (int i = 0; i < (int) chain.size(); i++)
@@ -153,16 +159,19 @@ void IconMenu::timerCallback()
             options.addItem (INDEX_EDIT + i, "Edit", ! item.missing);
             options.addItem (INDEX_BYPASS + i, "Bypass", true, item.bypassed);
             options.addSeparator();
-            options.addItem (INDEX_MOVE_UP + i, "Move Up", i > 0);
-            options.addItem (INDEX_MOVE_DOWN + i, "Move Down", i < (int) chain.size() - 1);
+            options.addItem (INDEX_MOVE_UP + i, "Move Up", linear && i > 0);
+            options.addItem (INDEX_MOVE_DOWN + i, "Move Down", linear && i < (int) chain.size() - 1);
             options.addSeparator();
-            options.addItem (INDEX_DELETE + i, "Delete");
+            options.addItem (INDEX_DELETE + i, "Delete", linear);
             menu.addSubMenu (item.missing ? item.name + " (missing)" : item.name, options);
         }
         menu.addSeparator();
         menu.addSectionHeader ("Available Plugins");
-        // All plugins
-        KnownPluginList::addToMenu (menu, knownPluginList.getTypes(), pluginSortMethod);
+        // All plugins (adding appends serially, so it is gated like the other chain ops)
+        if (linear)
+            KnownPluginList::addToMenu (menu, knownPluginList.getTypes(), pluginSortMethod);
+        else
+            menu.addItem (5, "Chain edits disabled: graph has parallel routing - edit on the canvas.", false);
     }
     else
     {
@@ -242,6 +251,9 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     // Plugins
     if (id > 2)
     {
+        // Re-checked at invocation time: the menu may have been built before a
+        // canvas edit branched the graph, and the serial ops must never run then.
+        const bool linear = im->controller.isLinearChain();
         const auto chain = im->controller.getChain();
         const auto chainUidForId = [&chain] (int itemId, int base) -> String
         {
@@ -254,7 +266,7 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
         // Delete plugin
         if (id >= im->INDEX_DELETE && id < im->INDEX_DELETE + 1000000)
         {
-            if (const String uid = chainUidForId (id, im->INDEX_DELETE); uid.isNotEmpty())
+            if (const String uid = chainUidForId (id, im->INDEX_DELETE); uid.isNotEmpty() && linear)
             {
                 im->controller.removeFromChain (uid);
                 im->controller.save (settings);
@@ -263,10 +275,13 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
         // Add plugin
         else if (KnownPluginList::getIndexChosenByMenu (im->knownPluginList.getTypes(), id) > -1)
         {
-            const auto knownTypes = im->knownPluginList.getTypes();
-            const PluginDescription plugin = knownTypes[KnownPluginList::getIndexChosenByMenu (knownTypes, id)];
-            im->controller.appendToChain (plugin);
-            im->controller.save (settings);
+            if (linear)
+            {
+                const auto knownTypes = im->knownPluginList.getTypes();
+                const PluginDescription plugin = knownTypes[KnownPluginList::getIndexChosenByMenu (knownTypes, id)];
+                im->controller.appendToChain (plugin);
+                im->controller.save (settings);
+            }
         }
         // Bypass plugin (live pass-through, no rebuild)
         else if (id >= im->INDEX_BYPASS && id < im->INDEX_BYPASS + 1000000)
@@ -290,7 +305,7 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
         // Move plugin up the list
         else if (id >= im->INDEX_MOVE_UP && id < im->INDEX_MOVE_UP + 1000000)
         {
-            if (const String uid = chainUidForId (id, im->INDEX_MOVE_UP); uid.isNotEmpty())
+            if (const String uid = chainUidForId (id, im->INDEX_MOVE_UP); uid.isNotEmpty() && linear)
             {
                 im->controller.moveUp (uid);
                 im->controller.save (settings);
@@ -299,7 +314,7 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
         // Move plugin down the list
         else if (id >= im->INDEX_MOVE_DOWN && id < im->INDEX_MOVE_DOWN + 1000000)
         {
-            if (const String uid = chainUidForId (id, im->INDEX_MOVE_DOWN); uid.isNotEmpty())
+            if (const String uid = chainUidForId (id, im->INDEX_MOVE_DOWN); uid.isNotEmpty() && linear)
             {
                 im->controller.moveDown (uid);
                 im->controller.save (settings);

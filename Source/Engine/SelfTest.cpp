@@ -554,6 +554,116 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test G — parallel-branch routing with live plugins: rewire a serial
+    //          in -> A -> B -> out chain into the fan-out/fan-in
+    //          in -> A -> out  ||  in -> B -> out via connect/disconnect (which
+    //          rewire WITHOUT reloading plugins), reject cycle-forming edges,
+    //          and prove with white noise that both branches carry signal — then
+    //          that disconnecting one branch silences only that branch. Both
+    //          plugins are BYPASSED for the metering phases (cf. Tests D/E:
+    //          some real FX self-oscillate, which would fake a live branch).
+    //==========================================================================
+    std::cout << "\n[G] parallel-branch routing" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("routing");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        const PluginDescription& pB = plugins.size() > 1 ? plugins.getReference (1) : pA;
+
+        const String uidA = controller.appendToChain (pA);
+        const String uidB = controller.appendToChain (pB);
+        r.expect (uidA.isNotEmpty() && uidB.isNotEmpty(), "both branch plugins instantiated");
+        r.expect (controller.isLinearChain(), "serial in->A->B->out starts as a linear chain");
+
+        const String inUid  = controller.document.getIoNodeUid (true);
+        const String outUid = controller.document.getIoNodeUid (false);
+        r.expect (inUid.isNotEmpty() && outUid.isNotEmpty(), "document exposes the IO node uids");
+
+        // Rejections while still serial: B -> A would close the cycle A -> B -> A,
+        // and audioOut can never be a source.
+        r.expect (! controller.canConnect (uidB, 0, uidA, 0),
+                  "canConnect rejects a cycle-forming edge (B -> A while A -> B exists)");
+        r.expect (! controller.connect (outUid, 0, uidA, 0),
+                  "connect rejects an edge out of audioOut (out -> A)");
+
+        // Rewire serial -> parallel: cut A -> B, then add in -> B and A -> out.
+        bool branched = true;
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            controller.disconnect (uidA, ch, uidB, ch);
+            branched = controller.connect (inUid, ch, uidB, ch)  && branched;
+            branched = controller.connect (uidA,  ch, outUid, ch) && branched;
+        }
+        r.expect (branched, "connect accepts both branch edges (in -> B, A -> out)");
+        r.expect (! controller.isLinearChain(), "parallel graph is no longer a linear chain");
+
+        // Deterministic pass-through into the node strips for the meter phases.
+        controller.setBypassed (uidA, true);
+        controller.setBypassed (uidB, true);
+
+        AudioBuffer<float> block (2, blockSize);
+        MidiBuffer midi;
+        Random rng (0x6e0d5a11);
+
+        // Drive `count` white-noise blocks; report each meter's max ch0 peak over
+        // the phase, and B's FINAL reading (to prove decay, not just a lull).
+        // Meter pointers are re-fetched each call: connect/disconnect re-splice
+        // the runtime strip/meter nodes, invalidating earlier pointers.
+        float maxA = 0.0f, maxB = 0.0f, maxOut = 0.0f, lastB = 0.0f;
+        auto driveNoise = [&] (int count)
+        {
+            const MeterTap* mA   = controller.getNodeMeter (uidA);
+            const MeterTap* mB   = controller.getNodeMeter (uidB);
+            const MeterTap* mOut = controller.getOutputMeter();
+            maxA = maxB = maxOut = lastB = 0.0f;
+            for (int b = 0; b < count; ++b)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    float* d = block.getWritePointer (ch);
+                    for (int i = 0; i < blockSize; ++i)
+                        d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
+                }
+                midi.clear();
+                graph.processBlock (block, midi);
+                if (mA   != nullptr) maxA   = jmax (maxA,   mA->read().peak[0]);
+                if (mB   != nullptr) { lastB = mB->read().peak[0]; maxB = jmax (maxB, lastB); }
+                if (mOut != nullptr) maxOut = jmax (maxOut, mOut->read().peak[0]);
+            }
+            return controller.getNodeMeter (uidA) != nullptr
+                && controller.getNodeMeter (uidB) != nullptr
+                && controller.getOutputMeter()    != nullptr;
+        };
+
+        r.expect (driveNoise (40), "node + master meters present on the parallel graph");
+        r.expect (maxA   > 0.0f, "branch A meter registers noise");
+        r.expect (maxB   > 0.0f, "branch B meter registers noise");
+        r.expect (maxOut > 0.0f, "master OUT meter registers the fan-in");
+
+        // Cut branch B at its input; A must keep flowing while B falls silent.
+        for (int ch = 0; ch < 2; ++ch)
+            controller.disconnect (inUid, ch, uidB, ch);
+
+        r.expect (driveNoise (40), "meters present again after the branch disconnect");
+        r.expect (maxA   > 0.0f,    "branch A meter still registers after cutting B");
+        r.expect (maxOut > 0.0f,    "master OUT meter still registers after cutting B");
+        r.expect (lastB  < 1.0e-4f, "disconnected branch B meter falls to ~0");
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();

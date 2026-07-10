@@ -1,4 +1,8 @@
 #include "GraphDocument.h"
+#include <set>
+#include <vector>
+#include <map>
+#include <utility>
 
 namespace
 {
@@ -205,6 +209,94 @@ void GraphDocument::removeConnectionsInvolving (const String& uid)
 }
 
 //==============================================================================
+void GraphDocument::setNodePosition (const String& uid, float x, float y)
+{
+    ValueTree n = getNodeByUid (uid);
+    n.setProperty (idX, x, nullptr);
+    n.setProperty (idY, y, nullptr);
+}
+
+float GraphDocument::getNodeX (const String& uid) const { return (float) getNodeByUid (uid).getProperty (idX, 0.5f); }
+float GraphDocument::getNodeY (const String& uid) const { return (float) getNodeByUid (uid).getProperty (idY, 0.5f); }
+
+bool GraphDocument::hasConnection (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const
+{
+    ValueTree conns = state.getChildWithName (idConnections);
+    for (int i = 0; i < conns.getNumChildren(); ++i)
+    {
+        ValueTree c = conns.getChild (i);
+        if (c.getProperty (idSrcUid).toString() == srcUid && (int) c.getProperty (idSrcCh) == srcCh
+         && c.getProperty (idDstUid).toString() == dstUid && (int) c.getProperty (idDstCh) == dstCh)
+            return true;
+    }
+    return false;
+}
+
+void GraphDocument::removeConnection (const String& srcUid, int srcCh, const String& dstUid, int dstCh)
+{
+    ValueTree conns = state.getChildWithName (idConnections);
+    for (int i = conns.getNumChildren(); --i >= 0;)
+    {
+        ValueTree c = conns.getChild (i);
+        if (c.getProperty (idSrcUid).toString() == srcUid && (int) c.getProperty (idSrcCh) == srcCh
+         && c.getProperty (idDstUid).toString() == dstUid && (int) c.getProperty (idDstCh) == dstCh)
+        {
+            conns.removeChild (i, nullptr);
+            return;
+        }
+    }
+}
+
+// True if following connection edges from fromUid can reach toUid (node level).
+bool GraphDocument::pathExists (const String& fromUid, const String& toUid) const
+{
+    if (fromUid == toUid)
+        return true;
+
+    ValueTree conns = state.getChildWithName (idConnections);
+    std::set<String> visited;
+    std::vector<String> stack { fromUid };
+
+    while (! stack.empty())
+    {
+        const String cur = stack.back();
+        stack.pop_back();
+        if (! visited.insert (cur).second)
+            continue;
+
+        for (int i = 0; i < conns.getNumChildren(); ++i)
+        {
+            ValueTree c = conns.getChild (i);
+            if (c.getProperty (idSrcUid).toString() == cur)
+            {
+                const String nxt = c.getProperty (idDstUid).toString();
+                if (nxt == toUid) return true;
+                stack.push_back (nxt);
+            }
+        }
+    }
+    return false;
+}
+
+bool GraphDocument::canAddConnection (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const
+{
+    if (srcUid == dstUid)                       return false;   // no self-connection
+    if (srcCh < 0 || srcCh > 1 || dstCh < 0 || dstCh > 1) return false;
+
+    ValueTree srcNode = getNodeByUid (srcUid);
+    ValueTree dstNode = getNodeByUid (dstUid);
+    if (! srcNode.isValid() || ! dstNode.isValid()) return false;
+
+    if (srcNode.getProperty (idType).toString() == typeAudioOut) return false;   // output is a sink
+    if (dstNode.getProperty (idType).toString() == typeAudioIn)  return false;   // input is a source
+
+    if (hasConnection (srcUid, srcCh, dstUid, dstCh)) return false;              // duplicate
+    if (pathExists (dstUid, srcUid))                 return false;              // would create a cycle
+
+    return true;
+}
+
+//==============================================================================
 GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings)
 {
     GraphDocument doc;   // starts with audioIn/audioOut
@@ -249,4 +341,59 @@ GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings
     }
 
     return doc;
+}
+
+//==============================================================================
+bool GraphDocument::isLinearChain() const
+{
+    const String in  = getIoNodeUid (true);
+    const String out = getIoNodeUid (false);
+
+    ValueTree nodes = state.getChildWithName (idNodes);
+    int pluginCount = 0;
+    for (int i = 0; i < nodes.getNumChildren(); ++i)
+        if (nodes.getChild (i).getProperty (idType).toString() == typePlugin)
+            ++pluginCount;
+
+    // Node-level distinct edges (dedupe the two stereo channels of each hop).
+    std::set<std::pair<String, String>> edges;
+    ValueTree conns = state.getChildWithName (idConnections);
+    for (int i = 0; i < conns.getNumChildren(); ++i)
+    {
+        ValueTree c = conns.getChild (i);
+        edges.insert ({ c.getProperty (idSrcUid).toString(), c.getProperty (idDstUid).toString() });
+    }
+
+    // Empty chain (no plugins): linear if there are no edges, or just in -> out.
+    if (pluginCount == 0)
+        return edges.empty() || (edges.size() == 1 && edges.count ({ in, out }) > 0);
+
+    std::map<String, std::vector<String>> outAdj;
+    for (const auto& e : edges)
+        outAdj[e.first].push_back (e.second);
+
+    // Follow a UNIQUE out-edge from audioIn until audioOut; any fan-out fails.
+    std::vector<String> path { in };
+    std::set<String> visited { in };
+    String cur = in;
+    while (cur != out)
+    {
+        const auto it = outAdj.find (cur);
+        if (it == outAdj.end() || it->second.size() != 1)
+            return false;                               // dead-end or fan-out
+        const String next = it->second.front();
+        if (! visited.insert (next).second)
+            return false;                               // revisit / cycle
+        path.push_back (next);
+        cur = next;
+    }
+
+    int pluginsOnPath = 0;
+    for (const auto& u : path)
+        if (getNodeByUid (u).getProperty (idType).toString() == typePlugin)
+            ++pluginsOnPath;
+
+    // Every plugin on the single path, and no edges outside it.
+    return pluginsOnPath == pluginCount
+        && (int) edges.size() == (int) path.size() - 1;
 }

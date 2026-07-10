@@ -65,6 +65,22 @@ public:
     void removeConnectionsInvolving (const String& uid);
 
     //==============================================================================
+    // Arbitrary routing (M6). Node positions are GUI-only (persisted, no audio
+    // effect). canAddConnection enforces: distinct nodes, stereo channels, no
+    // edge into audioIn / out of audioOut, no duplicate, and no cycle.
+    void  setNodePosition (const String& uid, float x, float y);
+    float getNodeX (const String& uid) const;
+    float getNodeY (const String& uid) const;
+    bool  hasConnection    (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const;
+    void  removeConnection (const String& srcUid, int srcCh, const String& dstUid, int dstCh);
+    bool  canAddConnection (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const;
+
+    // True iff the graph is a single unbranched series audioIn -> plugins -> audioOut
+    // covering every plugin, with no extra/parallel edges. The tray serial-chain
+    // ops (append/remove/move) are only safe — and only offered — when this holds.
+    bool isLinearChain() const;
+
+    //==============================================================================
     // Builds a document from the pre-2026 LightHost settings keys
     // (pluginListActive + plugin-order-*/plugin-bypass-*/plugin-state-*).
     // Returns an empty default document if there is nothing to migrate.
@@ -73,5 +89,6 @@ public:
     ValueTree state;   // the GRAPH tree; public for future GUI/undo binding
 
 private:
+    bool pathExists (const String& fromUid, const String& toUid) const;   // node-level reachability
     String addNodeInternal (const String& type, const String& name, float x, float y);
 };
