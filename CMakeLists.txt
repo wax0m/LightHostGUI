@@ -1,9 +1,21 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(LightHost VERSION 1.3.0 LANGUAGES C CXX)
+# CMP0091: select the MSVC runtime via CMAKE_MSVC_RUNTIME_LIBRARY (not compile flags).
+# Must be set before the first project() call to take effect.
+cmake_policy(SET CMP0091 NEW)
+
+# LightHostGUI — a GUI fork of upstream LightHost (https://github.com/opencma/LightHost).
+# Re-stamped as a fresh 1.0.0 identity; forked from LightHost 1.3.0.
+project(LightHostGUI VERSION 1.0.0
+        DESCRIPTION "GUI fork of upstream LightHost 1.3.0"
+        LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Statically link the MSVC runtime so the Release exe is a single self-contained
+# binary (no VC++ redistributable needed on the target machine).
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # ---------------------------------------------------------------------------
 # JUCE 8 — fetched at configure time, pinned. First configure downloads ~40 MB.
@@ -20,13 +32,13 @@ FetchContent_MakeAvailable(JUCE)
 # App target
 # ---------------------------------------------------------------------------
 juce_add_gui_app(LightHost
-    PRODUCT_NAME                  "Light Host"
+    PRODUCT_NAME                  "LightHost GUI"
     VERSION                       ${PROJECT_VERSION}
     COMPANY_NAME                  "LightHost"
     BUNDLE_ID                     "com.lighthost.app"
     ICON_BIG                      "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
-    MICROPHONE_PERMISSION_TEXT    "Light Host needs audio input to process it through your plugins."
+    MICROPHONE_PERMISSION_TEXT    "LightHost GUI needs audio input to process it through your plugins."
 )
 
 juce_generate_juce_header(LightHost)

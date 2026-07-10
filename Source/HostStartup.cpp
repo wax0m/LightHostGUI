@@ -27,7 +27,10 @@ public:
         }
 
         PropertiesFile::Options options;
-        options.applicationName     = getApplicationName();
+        // Pin the settings identity to "Light Host" (the pre-fork product name) so the
+        // LightHost GUI rename keeps reading the user's existing presets / plugin scan
+        // instead of orphaning them under a new "LightHost GUI.settings" file.
+        options.applicationName     = "Light Host";
         options.filenameSuffix      = "settings";
         options.osxLibrarySubFolder = "Preferences";
 
