@@ -61,7 +61,12 @@ private:
     int paramPollCounter = 0;
     SegmentedMeter meterL, meterR;
 
-    juce::Rectangle<int> bypassRect, removeRect, statusDotRect;
+    // Per-node MIDI enable (M7). Shown only for plugins that acceptsMidi(); a
+    // compact "MIDI" pill in the header toggling the document's receivesMidi flag.
+    bool showMidi = false;
+    bool midiOn   = false;
+
+    juce::Rectangle<int> bypassRect, removeRect, statusDotRect, midiRect;
     bool removeHot = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NodeCard)

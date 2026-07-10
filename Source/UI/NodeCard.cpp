@@ -15,6 +15,11 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
     if (format.isEmpty())
         format = missing ? "missing" : "VST3";
 
+    // MIDI toggle: only for a live plugin that accepts MIDI. Reflects the
+    // document's per-node receivesMidi flag (default on).
+    showMidi = ! missing && controller.nodeAcceptsMidi (uid);
+    midiOn   = showMidi && controller.getNodeReceivesMidi (uid);
+
     addAndMakeVisible (knobA);
     addAndMakeVisible (knobB);
     addAndMakeVisible (meterL);
@@ -144,6 +149,13 @@ void NodeCard::resized()
     removeRect = header.removeFromRight (19).withSizeKeepingCentre (19, 19);
     header.removeFromRight (6);
     bypassRect = header.removeFromRight (34).withSizeKeepingCentre (34, 16);
+    if (showMidi)
+    {
+        header.removeFromRight (7);
+        midiRect = header.removeFromRight (30).withSizeKeepingCentre (30, 16);
+    }
+    else
+        midiRect = {};
 
     r.removeFromTop (14);   // divider band
 
@@ -197,10 +209,12 @@ void NodeCard::paint (juce::Graphics& g)
     }
     g.fillEllipse (statusDotRect.toFloat());
 
-    // Name + format.
+    // Name + format. The leftmost header switch bounds the text: the MIDI pill
+    // (when shown) sits left of the bypass switch.
     {
+        const int switchesLeft = showMidi ? midiRect.getX() : bypassRect.getX();
         auto textArea = juce::Rectangle<int> (statusDotRect.getRight() + 8, 12,
-                                              bypassRect.getX() - statusDotRect.getRight() - 14, 30);
+                                              switchesLeft - statusDotRect.getRight() - 14, 30);
         g.setColour (LightHostLookAndFeel::textPrimary().withAlpha (contentAlpha));
         g.setFont (LightHostLookAndFeel::display (13.5f, true));
         g.drawText (name, textArea.removeFromTop (18), juce::Justification::bottomLeft);
@@ -218,6 +232,22 @@ void NodeCard::paint (juce::Graphics& g)
         const float tx = bypassed ? t.getX() + 2.0f : t.getRight() - 2.0f - d;
         g.setColour (LightHostLookAndFeel::bypassThumb());
         g.fillEllipse (tx, t.getY() + 2.0f, d, d);
+    }
+
+    // MIDI toggle pill (MIDI-accepting plugins only).
+    if (showMidi)
+    {
+        auto m = midiRect.toFloat();
+        g.setColour (midiOn ? LightHostLookAndFeel::accent() : LightHostLookAndFeel::bypassTrack());
+        g.fillRoundedRectangle (m, m.getHeight() * 0.5f);
+        if (! midiOn)
+        {
+            g.setColour (LightHostLookAndFeel::cardBorder());
+            g.drawRoundedRectangle (m, m.getHeight() * 0.5f, 1.0f);
+        }
+        g.setColour (midiOn ? LightHostLookAndFeel::nodeBottom() : LightHostLookAndFeel::textTert());
+        g.setFont (LightHostLookAndFeel::mono (8.0f));
+        g.drawText ("MIDI", midiRect, juce::Justification::centred);
     }
 
     // Remove ×.
@@ -263,6 +293,13 @@ void NodeCard::mouseDown (const juce::MouseEvent& e)
         repaint();
         return;
     }
+    if (showMidi && midiRect.contains (e.getPosition()))
+    {
+        midiOn = ! midiOn;
+        controller.setNodeReceivesMidi (uid, midiOn);   // live re-splice, no plugin reload
+        repaint();
+        return;
+    }
     if (removeRect.contains (e.getPosition()))
     {
         if (onRemove) onRemove (uid);
@@ -272,7 +309,8 @@ void NodeCard::mouseDown (const juce::MouseEvent& e)
 
 void NodeCard::mouseDoubleClick (const juce::MouseEvent& e)
 {
-    if (bypassRect.contains (e.getPosition()) || removeRect.contains (e.getPosition()))
+    if (bypassRect.contains (e.getPosition()) || removeRect.contains (e.getPosition())
+        || (showMidi && midiRect.contains (e.getPosition())))
         return;
     if (onOpenEditor) onOpenEditor (uid);
 }

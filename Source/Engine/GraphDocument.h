@@ -53,6 +53,8 @@ public:
     float getGain (const String& uid) const;   // linear, default 1.0 (0 dB)
     void  setPan  (const String& uid, float);
     float getPan  (const String& uid) const;    // -1..+1 balance, default 0
+    void  setReceivesMidi (const String& uid, bool);
+    bool  getReceivesMidi (const String& uid) const;   // default true; gates host MIDI to this node
     void setPluginState (const String& uid, const String& base64);
     String getPluginState (const String& uid) const;
     void clearAllPluginStates();

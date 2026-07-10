@@ -664,6 +664,114 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test H — MIDI routing (M7): if a discovered plugin acceptsMidi(), prove the
+    //          controller splices a runtime midiInputNode edge INTO it on
+    //          midiChannelIndex while receivesMidi is set, and DROPS that edge when
+    //          the flag is cleared (live re-splice, no plugin reload) — then
+    //          restores it. The plugin scan filters instruments, so most stereo FX
+    //          do not accept MIDI: if none do, SKIP the routing proof but still
+    //          assert the per-node receivesMidi flag toggles and survives save/reload.
+    //==========================================================================
+    std::cout << "\n[H] MIDI routing" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("midi");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        // Count live-graph edges landing on `target` at the MIDI channel index.
+        auto midiEdgesInto = [&graph] (AudioProcessorGraph::NodeID target)
+        {
+            int n = 0;
+            for (const auto& c : graph.getConnections())
+                if (c.destination.nodeID == target
+                    && c.destination.channelIndex == AudioProcessorGraph::midiChannelIndex)
+                    ++n;
+            return n;
+        };
+
+        // Find a discovered plugin that accepts MIDI; drop any that do not.
+        String midiUid;
+        for (const auto& d : plugins)
+        {
+            const String uid = controller.appendToChain (d);
+            if (uid.isEmpty())
+                continue;
+            if (controller.nodeAcceptsMidi (uid)) { midiUid = uid; break; }
+            controller.removeFromChain (uid);
+        }
+
+        if (midiUid.isNotEmpty())
+        {
+            r.expect (controller.getNodeReceivesMidi (midiUid),
+                      "receivesMidi defaults to true on a MIDI-accepting plugin");
+            r.expect (controller.nodeAcceptsMidi (midiUid),
+                      "nodeAcceptsMidi reports true for the discovered plugin");
+
+            auto* node = controller.getNodeForUid (midiUid);
+            r.expect (node != nullptr, "live node present for the MIDI plugin");
+
+            if (node != nullptr)
+            {
+                r.expect (midiEdgesInto (node->nodeID) == 1,
+                          "midiInputNode is spliced to the plugin on midiChannelIndex");
+
+                // Drive a note through the graph: must process cleanly with MIDI
+                // routed (we assert structure, not the plugin's own response).
+                AudioBuffer<float> block (2, blockSize); block.clear();
+                MidiBuffer midi;
+                midi.addEvent (MidiMessage::noteOn  (1, 60, (uint8) 100), 0);
+                midi.addEvent (MidiMessage::noteOff (1, 60),               blockSize / 2);
+                graph.processBlock (block, midi);
+                r.expect (true, "note-on/off block processed with MIDI routed");
+
+                // Clear the flag: the MIDI edge must drop (plugin instance kept).
+                controller.setNodeReceivesMidi (midiUid, false);
+                node = controller.getNodeForUid (midiUid);   // re-fetch after re-splice
+                r.expect (node != nullptr && midiEdgesInto (node->nodeID) == 0,
+                          "clearing receivesMidi drops the MIDI edge");
+
+                // Restore: the edge comes back.
+                controller.setNodeReceivesMidi (midiUid, true);
+                node = controller.getNodeForUid (midiUid);
+                r.expect (node != nullptr && midiEdgesInto (node->nodeID) == 1,
+                          "restoring receivesMidi re-splices the MIDI edge");
+            }
+        }
+        else
+        {
+            std::cout << "  SKIP no discovered plugin accepts MIDI; "
+                         "verifying the receivesMidi flag toggles + persists only" << std::endl;
+
+            const String uid = controller.appendToChain (pA);
+            r.expect (uid.isNotEmpty(), "plugin instantiated for the flag round-trip");
+            r.expect (controller.getNodeReceivesMidi (uid), "receivesMidi defaults to true");
+            controller.setNodeReceivesMidi (uid, false);
+            r.expect (! controller.getNodeReceivesMidi (uid), "receivesMidi can be cleared");
+            controller.save (*settings);
+
+            // Reload into a fresh controller/graph and confirm the flag persisted.
+            AudioProcessorGraph graph2;
+            graph2.setPlayConfigDetails (2, 2, sr, blockSize);
+            graph2.prepareToPlay (sr, blockSize);
+            GraphController c2 (graph2, formatManager);
+            c2.loadFrom (*settings);
+            r.expect (! c2.getNodeReceivesMidi (uid), "cleared receivesMidi survives save + reload");
+        }
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();

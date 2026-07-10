@@ -96,6 +96,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/StripTests.cpp
         Tests/ParamTests.cpp
         Tests/RoutingTests.cpp
+        Tests/MidiTests.cpp
         Source/Engine/GraphDocument.cpp
     )
 

@@ -77,6 +77,11 @@ IconMenu::IconMenu() : INDEX_EDIT (1000000), INDEX_BYPASS (2000000), INDEX_DELET
     deviceManager.initialise (256, 256, savedAudioState.get(), true);
     player.setProcessor (&graph);
     deviceManager.addAudioCallback (&player);
+    // MIDI inputs -> player -> graph's midiInputNode (M7). The player is a
+    // MidiInputCallback and forwards MIDI into the graph it drives.
+    for (auto& mi : MidiInput::getAvailableDevices())
+        deviceManager.setMidiInputDeviceEnabled (mi.identifier, true);
+    deviceManager.addMidiInputDeviceCallback ({}, &player);   // {} = all enabled inputs
     // Plugins - known list
     auto savedPluginList = getAppProperties().getUserSettings()->getXmlValue ("pluginList");
     if (savedPluginList != nullptr)
@@ -91,6 +96,7 @@ IconMenu::IconMenu() : INDEX_EDIT (1000000), INDEX_BYPASS (2000000), INDEX_DELET
 
 IconMenu::~IconMenu()
 {
+    deviceManager.removeMidiInputDeviceCallback ({}, &player);
     controller.save (*getAppProperties().getUserSettings());
 }
 

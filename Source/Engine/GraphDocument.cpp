@@ -21,6 +21,7 @@ namespace
     const Identifier idState       ("state");
     const Identifier idGain        ("gain");
     const Identifier idPan         ("pan");
+    const Identifier idMidi        ("midi");
     const Identifier idSrcUid      ("srcUid");
     const Identifier idSrcCh       ("srcCh");
     const Identifier idDstUid      ("dstUid");
@@ -157,6 +158,16 @@ void GraphDocument::setPan (const String& uid, float pan)
 float GraphDocument::getPan (const String& uid) const
 {
     return (float) getNodeByUid (uid).getProperty (idPan, 0.0f);
+}
+
+void GraphDocument::setReceivesMidi (const String& uid, bool b)
+{
+    getNodeByUid (uid).setProperty (idMidi, b, nullptr);
+}
+
+bool GraphDocument::getReceivesMidi (const String& uid) const
+{
+    return (bool) getNodeByUid (uid).getProperty (idMidi, true);
 }
 
 void GraphDocument::clearAllPluginStates()

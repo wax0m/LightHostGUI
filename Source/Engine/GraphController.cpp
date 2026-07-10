@@ -117,6 +117,7 @@ void GraphController::rebuild()
     uidToNodeId.clear();
     inputMeter = outputMeter = nullptr;
     nodeStrips.clear();
+    midiInputNode = nullptr;
 
     using IOProcessor = AudioProcessorGraph::AudioGraphIOProcessor;
 
@@ -176,6 +177,7 @@ void GraphController::rebuild()
 
     insertNodeStrips();
     insertMasterMeters();
+    insertMidiRouting();
 }
 
 void GraphController::captureStates()
@@ -513,6 +515,12 @@ void GraphController::rewireConnections()
     for (auto id : runtimeNodes)
         graph.removeNode (id);
 
+    if (midiInputNode != nullptr)
+    {
+        graph.removeNode (midiInputNode->nodeID);
+        midiInputNode = nullptr;
+    }
+
     for (const auto& c : graph.getConnections())
         graph.removeConnection (c);
 
@@ -529,6 +537,7 @@ void GraphController::rewireConnections()
 
     insertNodeStrips();
     insertMasterMeters();
+    insertMidiRouting();
 }
 
 bool GraphController::connect (const String& srcUid, int srcCh, const String& dstUid, int dstCh)
@@ -574,3 +583,56 @@ float GraphController::getNodeX (const String& uid) const { return document.getN
 float GraphController::getNodeY (const String& uid) const { return document.getNodeY (uid); }
 
 bool GraphController::isLinearChain() const { return document.isLinearChain(); }
+
+//==============================================================================
+// MIDI routing (M7). Runtime-only, like the meters/strips: a midiInputNode is
+// added and connected (on midiChannelIndex) to every plugin node that both
+// accepts MIDI and has its per-node receivesMidi flag set. Added only when at
+// least one such target exists, so a pure-audio graph carries no MIDI plumbing.
+
+void GraphController::insertMidiRouting()
+{
+    midiInputNode = nullptr;
+    using IOProcessor = AudioProcessorGraph::AudioGraphIOProcessor;
+
+    std::vector<AudioProcessorGraph::NodeID> targets;
+    for (const auto& entry : uidToNodeId)
+    {
+        if (! document.getReceivesMidi (entry.first))
+            continue;
+        if (auto* n = graph.getNodeForId (entry.second))
+            if (auto* proc = n->getProcessor())
+                if (proc->acceptsMidi())
+                    targets.push_back (entry.second);
+    }
+
+    if (targets.empty())
+        return;
+
+    midiInputNode = graph.addNode (std::make_unique<IOProcessor> (IOProcessor::midiInputNode));
+    if (midiInputNode == nullptr)
+        return;
+
+    for (auto t : targets)
+        graph.addConnection ({ { midiInputNode->nodeID, AudioProcessorGraph::midiChannelIndex },
+                               { t,                      AudioProcessorGraph::midiChannelIndex } });
+}
+
+void GraphController::setNodeReceivesMidi (const String& uid, bool b)
+{
+    document.setReceivesMidi (uid, b);
+    rewireConnections();          // re-splice MIDI edges live (no plugin reload)
+}
+
+bool GraphController::getNodeReceivesMidi (const String& uid) const
+{
+    return document.getReceivesMidi (uid);
+}
+
+bool GraphController::nodeAcceptsMidi (const String& uid) const
+{
+    if (auto* n = getNodeForUid (uid))
+        if (auto* p = n->getProcessor())
+            return p->acceptsMidi();
+    return false;
+}

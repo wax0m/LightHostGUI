@@ -74,6 +74,12 @@ public:
     bool canConnect (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const;
     std::vector<Connection> getConnections() const;
     bool isLinearChain() const;   // tray serial ops are only offered when true
+
+    // MIDI routing (M7): host MIDI reaches plugins that acceptsMidi() and whose
+    // per-node receivesMidi flag is set. Live re-splice, no plugin reload.
+    void setNodeReceivesMidi (const String& uid, bool);
+    bool getNodeReceivesMidi (const String& uid) const;
+    bool nodeAcceptsMidi (const String& uid) const;   // queries the live plugin
     void  setNodePosition (const String& uid, float x, float y);
     float getNodeX (const String& uid) const;
     float getNodeY (const String& uid) const;
@@ -101,6 +107,7 @@ private:
     MeterProcessor* spliceMeterAfter  (AudioProcessorGraph::NodeID source);
 
     void insertNodeStrips();
+    void insertMidiRouting();
     NodeStripProcessor* spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan);
 
     AudioProcessorGraph& graph;
@@ -109,6 +116,7 @@ private:
     MeterProcessor* inputMeter  = nullptr;   // owned by the graph node, not us
     MeterProcessor* outputMeter = nullptr;
     std::map<String, NodeStripProcessor*> nodeStrips;   // plugin uid -> its strip (graph-owned)
+    AudioProcessorGraph::Node::Ptr midiInputNode;       // runtime MIDI source (graph-owned)
 
     JUCE_DECLARE_NON_COPYABLE (GraphController)
 };
