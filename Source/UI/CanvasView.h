@@ -73,6 +73,10 @@ public:
     void tick();                    // 60 fps: meters + flow animation
     int  getContentWidth() const noexcept { return virtualW; }
 
+    // Told by the host how much of the canvas is on-screen so the canvas can grow to
+    // fill the viewport (no empty gap); node positions still map onto virtualW/virtualH.
+    void setVisibleArea (int w, int h);
+
     // Default viewport height the window opens at (the virtual canvas is taller and
     // scrolls inside the viewport).
     static constexpr int canvasHeight = 420;
@@ -97,6 +101,7 @@ private:
     struct Cable { juce::String src, dst; juce::Point<float> a, b; };
 
     void rebuildViews();
+    void applyCanvasSize();         // size the canvas to max(content, visible area)
     void autoLayoutIfStacked();
     juce::Point<int>   centreForNorm (float nx, float ny) const;
     juce::Point<float> normForCentre (juce::Point<int> centre) const;
@@ -134,6 +139,19 @@ private:
     int virtualH = 700;
     static constexpr int marginX = 140;   // ~half card width + gutter
     static constexpr int marginY = 170;   // ~half card height + gutter
+
+    // Layout tuning. Plugin cards auto-lay-out across the normalised [bandLo..bandHi]
+    // band (endpoints sit outside it: IN at 0.05, OUT at 0.95); refresh() scales the
+    // virtual width so adjacent plugin centres stay >= nodeSlot apart (no overlap).
+    static constexpr int   nodeSlot      = 270;    // card width (226) + gutter
+    static constexpr float layoutBandLo  = 0.2f;
+    static constexpr float layoutBandHi  = 0.8f;
+    static constexpr float layoutBandSpan = layoutBandHi - layoutBandLo;
+
+    // On-screen viewport size (set by the host); the canvas grows to at least this so
+    // there is no empty gap when the window is larger than the node content.
+    int visibleW = 0;
+    int visibleH = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CanvasView)
 };

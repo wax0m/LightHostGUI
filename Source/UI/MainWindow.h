@@ -29,7 +29,7 @@ public:
         setContentOwned (content, true);
         setResizable (true, false);
         setResizeLimits (520, 320, 2400, 900);
-        centreWithSize (juce::jmin (getWidth(), 1180), getHeight());
+        centreWithSize (juce::jmin (getWidth(), 1280), getHeight());
     }
 
     ~MainWindow() override

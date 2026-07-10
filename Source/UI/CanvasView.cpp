@@ -191,7 +191,8 @@ void CanvasView::autoLayoutIfStacked()
     const int n = (int) pluginUids.size();
     for (int i = 0; i < n; ++i)
     {
-        const float nx = n == 1 ? 0.5f : 0.2f + (float) i * (0.6f / (float) (n - 1));
+        const float nx = n == 1 ? 0.5f
+                                : layoutBandLo + (float) i * (layoutBandSpan / (float) (n - 1));
         controller.setNodePosition (pluginUids[(size_t) i], nx, 0.5f);
     }
 }
@@ -199,9 +200,36 @@ void CanvasView::autoLayoutIfStacked()
 void CanvasView::refresh()
 {
     rebuildViews();
-    setSize (virtualW, virtualH);   // fixed virtual canvas; the viewport scrolls
-    resized();
+
+    // Scale the virtual width to the plugin count so a migrated multi-plugin chain
+    // lays out without overlap: plugins span the normalised layoutBand, so the usable
+    // width must be large enough that band-span / (n-1) maps to at least nodeSlot px.
+    const int pluginCount = cards.size();
+    const int spanPx = pluginCount > 1
+        ? juce::roundToInt ((float) nodeSlot * (float) (pluginCount - 1) / layoutBandSpan)
+        : 0;
+    virtualW = juce::jmax (1200, marginX * 2 + spanPx);
+
+    // TODO(zoom): apply a canvas AffineTransform::scale here for user zoom.
+    applyCanvasSize();              // virtual canvas; the viewport scrolls
     repaint();
+}
+
+void CanvasView::setVisibleArea (int w, int h)
+{
+    if (w == visibleW && h == visibleH)
+        return;
+    visibleW = w;
+    visibleH = h;
+    applyCanvasSize();
+}
+
+void CanvasView::applyCanvasSize()
+{
+    // Grow to fill the viewport so there is no empty gap, but never below the node
+    // content extent; node centres still map onto virtualW/virtualH via centreForNorm.
+    setSize (juce::jmax (virtualW, visibleW), juce::jmax (virtualH, visibleH));
+    resized();
 }
 
 void CanvasView::tick()

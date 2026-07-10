@@ -29,7 +29,7 @@ MainComponent::MainComponent (GraphController& controllerToPoll, const PresetSto
     viewport.setScrollBarsShown (true, true);     // free 2D placement: both axes
     addAndMakeVisible (viewport);
 
-    setSize (900, TitleBar::barHeight + CanvasView::canvasHeight);
+    setSize (1200, 720);
     startTimerHz (60);
 }
 
@@ -58,6 +58,7 @@ void MainComponent::resized()
     auto r = getLocalBounds();
     titleBar.setBounds (r.removeFromTop (TitleBar::barHeight));
     viewport.setBounds (r);
+    canvas.setVisibleArea (viewport.getMaximumVisibleWidth(), viewport.getMaximumVisibleHeight());
 }
 
 void MainComponent::timerCallback()
