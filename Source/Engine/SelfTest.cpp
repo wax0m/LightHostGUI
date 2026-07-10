@@ -4,6 +4,7 @@
 
 #include "SelfTest.h"
 #include "GraphController.h"
+#include "PresetStore.h"
 
 using namespace juce;
 
@@ -768,6 +769,71 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         }
 
         controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
+    // Test I — presets round-trip. Build two distinct chains, snapshot each into a
+    //          PresetStore, round-trip the store through XML (as persisted in
+    //          settings), then switch between presets and assert the controller's
+    //          document rebuilds to match each. Also assert names + active index
+    //          survive a real settings save/reload.
+    //==========================================================================
+    std::cout << "\n[I] presets round-trip" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("presets");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        const PluginDescription& p2 = plugins.size() > 1 ? plugins.getReference (1) : pA;
+
+        // Preset A: a single-plugin chain.
+        const String a1 = controller.appendToChain (pA);
+        r.expect (a1.isNotEmpty(), "preset-A plugin instantiated");
+
+        PresetStore store;
+        const int idxA = store.addPreset ("A", controller.snapshotDocument());
+        r.expect (idxA == 0, "first preset added at index 0");
+
+        // Preset B: a two-plugin chain (a distinct document).
+        const String b2 = controller.appendToChain (p2);
+        r.expect (b2.isNotEmpty(), "preset-B second plugin instantiated");
+        const int idxB = store.addPreset ("B", controller.snapshotDocument());
+        r.expect (store.getNumPresets() == 2, "store holds two presets");
+
+        // Round-trip the whole store through XML (as persisted under "presets").
+        store.setActiveIndex (idxB);
+        PresetStore round = PresetStore::fromXml (store.toXml());
+        r.expect (round.isValid(), "store XML round-trips to a valid store");
+        r.expect (round.getNumPresets() == 2, "preset count survives round-trip");
+        r.expect (round.getPresetName (0) == "A" && round.getPresetName (1) == "B",
+                  "preset names survive round-trip");
+        r.expect (round.getActiveIndex() == idxB, "active index survives round-trip");
+
+        // Switch between presets and assert the controller document matches each.
+        controller.loadDocument (round.getPresetDocument (idxA));
+        r.expect (controller.isLinearChain() && (int) controller.getChain().size() == 1,
+                  "loading preset A rebuilds the 1-plugin chain");
+        controller.loadDocument (round.getPresetDocument (idxB));
+        r.expect (controller.isLinearChain() && (int) controller.getChain().size() == 2,
+                  "loading preset B rebuilds the 2-plugin chain");
+
+        // Persist through a real settings save/reload too.
+        settings->setValue ("presets", store.toXml());
+        settings->saveIfNeeded();
+        PresetStore fromSettings = PresetStore::fromXml (settings->getValue ("presets"));
+        r.expect (fromSettings.getNumPresets() == 2 && fromSettings.getActiveIndex() == idxB,
+                  "presets survive a settings save/reload");
+
         f.deleteFile();
     }
 

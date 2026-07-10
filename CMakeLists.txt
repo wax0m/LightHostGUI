@@ -37,6 +37,7 @@ target_sources(LightHost PRIVATE
     Source/PluginWindow.cpp
     Source/Engine/GraphDocument.cpp
     Source/Engine/GraphController.cpp
+    Source/Engine/PresetStore.cpp
     Source/Engine/SelfTest.cpp
     Source/UI/MainComponent.cpp
     Source/UI/NodeCard.cpp
@@ -137,6 +138,7 @@ if(LIGHTHOST_BUILD_RUNTIME_TESTS)
         Source/Engine/SelfTest.cpp
         Source/Engine/GraphDocument.cpp
         Source/Engine/GraphController.cpp
+        Source/Engine/PresetStore.cpp
         Source/PluginWindow.cpp
     )
 

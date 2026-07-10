@@ -20,21 +20,33 @@ public:
     std::function<void()> onPreferences;
     std::function<void()> onEditPlugins;
 
+    // Preset binding (supplied by MainComponent → PresetStore / IconMenu).
+    std::function<int()>                 getPresetCount;
+    std::function<juce::String (int)>    getPresetName;
+    std::function<int()>                 getActivePreset;
+    std::function<void (int)>            onSelectPreset;
+    std::function<void()>                onAddPreset;
+    std::function<void (int)>            onRenamePreset;
+    std::function<void()>                onSavePreset;
+    std::function<void()>                onDeletePreset;
+
+    void refreshPresets();   // recompute tab layout + repaint from the store
+
     static constexpr int barHeight = 50;
 
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
 
 private:
     void showSettingsMenu();
-
-    juce::StringArray tabs { "Vocal Chain", "Drum Bus", "Master", "Guitar DI", "Synth Wide" };
-    int activeTab = 0;
+    juce::StringArray presetNames() const;
 
     juce::Array<juce::Rectangle<int>> tabRects;
+    juce::Rectangle<int> plusRect;
     juce::Rectangle<int> settingsRect;
     bool settingsHot = false;
 

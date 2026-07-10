@@ -5,6 +5,21 @@ namespace lighthost::ui
 
 TitleBar::TitleBar() { setInterceptsMouseClicks (true, true); }
 
+juce::StringArray TitleBar::presetNames() const
+{
+    juce::StringArray names;
+    if (getPresetCount)
+        for (int i = 0, n = getPresetCount(); i < n; ++i)
+            names.add (getPresetName ? getPresetName (i) : juce::String());
+    return names;
+}
+
+void TitleBar::refreshPresets()
+{
+    resized();
+    repaint();
+}
+
 void TitleBar::resized()
 {
     tabRects.clear();
@@ -12,11 +27,13 @@ void TitleBar::resized()
     r.removeFromLeft (16 + 14 + 8 + 90 + 14);   // logo + wordmark + divider
 
     auto font = LightHostLookAndFeel::display (13.0f, false);
-    for (const auto& t : tabs)
+    for (const auto& t : presetNames())
     {
         const int w = juce::GlyphArrangement::getStringWidthInt (font, t) + 30;
         tabRects.add (r.removeFromLeft (w));
     }
+
+    plusRect = r.removeFromLeft (26);   // "+" add-preset tab
 
     settingsRect = getLocalBounds().removeFromRight (14).withSizeKeepingCentre (30, 26).translated (-8, 0);
 }
@@ -48,19 +65,26 @@ void TitleBar::paint (juce::Graphics& g)
     g.setColour (juce::Colour (0xff3a352f));
     g.fillRect (128, getHeight() / 2 - 9, 1, 18);
 
-    // Preset tabs.
+    // Preset tabs (read live from the store).
+    const auto names  = presetNames();
+    const int  active = getActivePreset ? getActivePreset() : -1;
     g.setFont (LightHostLookAndFeel::display (13.0f, false));
-    for (int i = 0; i < tabRects.size(); ++i)
+    for (int i = 0; i < tabRects.size() && i < names.size(); ++i)
     {
-        const bool active = (i == activeTab);
-        g.setColour (active ? juce::Colour (0xfff0ebe3) : LightHostLookAndFeel::textSecond());
-        g.drawText (tabs[i], tabRects[i], juce::Justification::centred);
-        if (active)
+        const bool isActive = (i == active);
+        g.setColour (isActive ? juce::Colour (0xfff0ebe3) : LightHostLookAndFeel::textSecond());
+        g.drawText (names[i], tabRects[i], juce::Justification::centred);
+        if (isActive)
         {
             g.setColour (LightHostLookAndFeel::accent());
             g.fillRect (tabRects[i].getX() + 6, getHeight() - 2, tabRects[i].getWidth() - 12, 2);
         }
     }
+
+    // "+" add-preset tab.
+    g.setColour (LightHostLookAndFeel::textTert());
+    g.setFont (LightHostLookAndFeel::display (17.0f, false));
+    g.drawText ("+", plusRect, juce::Justification::centred);
 
     // Right cluster: CPU meter + sample rate.
     auto rc = settingsRect.getX() - 12;
@@ -109,8 +133,20 @@ void TitleBar::mouseDown (const juce::MouseEvent& e)
     for (int i = 0; i < tabRects.size(); ++i)
         if (tabRects[i].contains (e.getPosition()))
         {
-            activeTab = i;   // visual only for now
-            repaint();
+            if (onSelectPreset) onSelectPreset (i);
+            return;
+        }
+
+    if (plusRect.contains (e.getPosition()) && onAddPreset)
+        onAddPreset();
+}
+
+void TitleBar::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    for (int i = 0; i < tabRects.size(); ++i)
+        if (tabRects[i].contains (e.getPosition()))
+        {
+            if (onRenamePreset) onRenamePreset (i);
             return;
         }
 }
@@ -121,6 +157,11 @@ void TitleBar::showSettingsMenu()
     m.addSectionHeader ("LIGHTHOST");
     m.addItem (1, "Preferences…");
     m.addItem (2, "Edit Plug-ins…");
+    m.addSeparator();
+    m.addSectionHeader ("PRESET");
+    m.addItem (3, "Save Preset");
+    m.addItem (4, "Rename Preset…");
+    m.addItem (5, "Delete Preset");
 
     settingsHot = true;
     repaint();
@@ -130,8 +171,11 @@ void TitleBar::showSettingsMenu()
         {
             settingsHot = false;
             repaint();
-            if (r == 1 && onPreferences) onPreferences();
+            if      (r == 1 && onPreferences) onPreferences();
             else if (r == 2 && onEditPlugins) onEditPlugins();
+            else if (r == 3 && onSavePreset)  onSavePreset();
+            else if (r == 4 && onRenamePreset && getActivePreset) onRenamePreset (getActivePreset());
+            else if (r == 5 && onDeletePreset) onDeletePreset();
         });
 }
 

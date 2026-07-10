@@ -17,7 +17,7 @@ namespace lighthost::ui
 class MainWindow : public juce::DocumentWindow
 {
 public:
-    MainWindow (GraphController& controller, MainComponent::Callbacks callbacks)
+    MainWindow (GraphController& controller, const PresetStore& store, MainComponent::Callbacks callbacks)
         : juce::DocumentWindow ("Light Host",
                                 LightHostLookAndFeel::appBg(),
                                 juce::DocumentWindow::minimiseButton | juce::DocumentWindow::closeButton)
@@ -25,7 +25,7 @@ public:
         setLookAndFeel (&lookAndFeel);
         setUsingNativeTitleBar (true);
 
-        content = new MainComponent (controller, std::move (callbacks));
+        content = new MainComponent (controller, store, std::move (callbacks));
         setContentOwned (content, true);
         setResizable (true, false);
         setResizeLimits (520, 320, 2400, 900);
@@ -38,7 +38,8 @@ public:
         setLookAndFeel (nullptr);
     }
 
-    void refreshChain() { if (content != nullptr) content->refreshChain(); }
+    void refreshChain()   { if (content != nullptr) content->refreshChain(); }
+    void refreshPresets() { if (content != nullptr) content->refreshPresets(); }
 
     // Hide to tray instead of quitting — the engine keeps running in the background.
     void closeButtonPressed() override

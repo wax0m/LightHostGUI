@@ -11,6 +11,7 @@
 
 #include <JuceHeader.h>
 #include "Engine/GraphController.h"
+#include "Engine/PresetStore.h"
 
 namespace lighthost::ui { class MainWindow; }
 
@@ -25,7 +26,7 @@ public:
     static void menuInvocationCallback (int id, IconMenu*);
     void changeListenerCallback (ChangeBroadcaster* changed) override;
 
-    const int INDEX_EDIT, INDEX_BYPASS, INDEX_DELETE, INDEX_MOVE_UP, INDEX_MOVE_DOWN;
+    const int INDEX_EDIT, INDEX_BYPASS, INDEX_DELETE, INDEX_MOVE_UP, INDEX_MOVE_DOWN, INDEX_PRESET;
 
 private:
     void timerCallback() override;
@@ -37,6 +38,17 @@ private:
     void removePluginsLackingInputOutput();
     void setIcon();
 
+    // Presets (scenes). The store is persisted alongside settings under "presets";
+    // the active preset mirrors the live controller document.
+    void loadPresets();
+    void persistPresets();                 // snapshot active + write settings
+    void switchToPreset (int index);
+    void addPreset();
+    void renamePreset (int index);
+    void saveActivePreset();
+    void deleteActivePreset();
+    String promptForName (const String& title, const String& initial);
+
     AudioDeviceManager deviceManager;
     AudioPluginFormatManager formatManager;
     KnownPluginList knownPluginList;
@@ -46,6 +58,7 @@ private:
     AudioProcessorGraph graph;
     AudioProcessorPlayer player;
     GraphController controller { graph, formatManager };
+    PresetStore store;
     #if JUCE_WINDOWS
     int x, y;
     #endif

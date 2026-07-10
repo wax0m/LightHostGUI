@@ -65,7 +65,7 @@ private:
     IconMenu& owner;
 };
 
-IconMenu::IconMenu() : INDEX_EDIT (1000000), INDEX_BYPASS (2000000), INDEX_DELETE (3000000), INDEX_MOVE_UP (4000000), INDEX_MOVE_DOWN (5000000)
+IconMenu::IconMenu() : INDEX_EDIT (1000000), INDEX_BYPASS (2000000), INDEX_DELETE (3000000), INDEX_MOVE_UP (4000000), INDEX_MOVE_DOWN (5000000), INDEX_PRESET (6000000)
 {
     // Initialization
     addDefaultFormatsToManager (formatManager);   // JUCE 8: replaces AudioPluginFormatManager::addDefaultFormats()
@@ -90,6 +90,8 @@ IconMenu::IconMenu() : INDEX_EDIT (1000000), INDEX_BYPASS (2000000), INDEX_DELET
     knownPluginList.addChangeListener (this);
     // Signal graph (migrates legacy chain settings on first run)
     controller.loadFrom (*getAppProperties().getUserSettings());
+    // Presets: load the store, or seed a "Default" from the just-loaded graph.
+    loadPresets();
     setIcon();
     setIconTooltip (JUCEApplication::getInstance()->getApplicationName());
 }
@@ -97,7 +99,145 @@ IconMenu::IconMenu() : INDEX_EDIT (1000000), INDEX_BYPASS (2000000), INDEX_DELET
 IconMenu::~IconMenu()
 {
     deviceManager.removeMidiInputDeviceCallback ({}, &player);
+    persistPresets();
     controller.save (*getAppProperties().getUserSettings());
+}
+
+//== Presets ===================================================================
+void IconMenu::loadPresets()
+{
+    auto& settings = *getAppProperties().getUserSettings();
+    store = PresetStore::fromXml (settings.getValue ("presets"));
+
+    // Migration / first run: never leave the store empty — seed a "Default" preset
+    // from the current live document so an existing chain is preserved as a scene.
+    if (! store.isValid() || store.getNumPresets() == 0)
+    {
+        store = PresetStore();
+        store.addPreset ("Default", controller.snapshotDocument());
+        store.setActiveIndex (0);
+    }
+}
+
+void IconMenu::persistPresets()
+{
+    auto& settings = *getAppProperties().getUserSettings();
+    // Fold the live document into the active preset so "last active" and the active
+    // preset agree on the next launch.
+    if (const int active = store.getActiveIndex(); active >= 0)
+        store.setPresetDocument (active, controller.snapshotDocument());
+    settings.setValue ("presets", store.toXml());
+    settings.saveIfNeeded();
+}
+
+void IconMenu::switchToPreset (int index)
+{
+    if (index < 0 || index >= store.getNumPresets() || index == store.getActiveIndex())
+        return;
+
+    auto& settings = *getAppProperties().getUserSettings();
+    if (const int active = store.getActiveIndex(); active >= 0)
+        store.setPresetDocument (active, controller.snapshotDocument());   // save current
+
+    store.setActiveIndex (index);
+    controller.loadDocument (store.getPresetDocument (index));             // load target
+
+    controller.save (settings);
+    settings.setValue ("presets", store.toXml());
+    settings.saveIfNeeded();
+
+    if (mainWindow != nullptr)
+    {
+        mainWindow->refreshChain();
+        mainWindow->refreshPresets();
+    }
+}
+
+void IconMenu::addPreset()
+{
+    const String name = promptForName ("New Preset", "Preset " + String (store.getNumPresets() + 1));
+    if (name.isEmpty())
+        return;
+
+    // Snapshot the current scene, then add a copy of it as a new active preset.
+    if (const int active = store.getActiveIndex(); active >= 0)
+        store.setPresetDocument (active, controller.snapshotDocument());
+    const int idx = store.addPreset (name, controller.snapshotDocument());
+    store.setActiveIndex (idx);   // live doc already equals the new preset — no reload
+
+    auto& settings = *getAppProperties().getUserSettings();
+    settings.setValue ("presets", store.toXml());
+    settings.saveIfNeeded();
+
+    if (mainWindow != nullptr)
+        mainWindow->refreshPresets();
+}
+
+void IconMenu::renamePreset (int index)
+{
+    if (index < 0 || index >= store.getNumPresets())
+        return;
+    const String name = promptForName ("Rename Preset", store.getPresetName (index));
+    if (name.isEmpty())
+        return;
+
+    store.setPresetName (index, name);
+    auto& settings = *getAppProperties().getUserSettings();
+    settings.setValue ("presets", store.toXml());
+    settings.saveIfNeeded();
+
+    if (mainWindow != nullptr)
+        mainWindow->refreshPresets();
+}
+
+void IconMenu::saveActivePreset()
+{
+    const int active = store.getActiveIndex();
+    if (active < 0)
+        return;
+    store.setPresetDocument (active, controller.snapshotDocument());
+    auto& settings = *getAppProperties().getUserSettings();
+    settings.setValue ("presets", store.toXml());
+    settings.saveIfNeeded();
+}
+
+void IconMenu::deleteActivePreset()
+{
+    const int active = store.getActiveIndex();
+    if (active < 0)
+        return;
+
+    store.removePreset (active);
+    if (store.getNumPresets() == 0)   // never leave 0 presets
+    {
+        store.addPreset ("Default", controller.snapshotDocument());
+        store.setActiveIndex (0);
+    }
+
+    const int newActive = store.getActiveIndex();
+    controller.loadDocument (store.getPresetDocument (newActive));
+
+    auto& settings = *getAppProperties().getUserSettings();
+    controller.save (settings);
+    settings.setValue ("presets", store.toXml());
+    settings.saveIfNeeded();
+
+    if (mainWindow != nullptr)
+    {
+        mainWindow->refreshChain();
+        mainWindow->refreshPresets();
+    }
+}
+
+String IconMenu::promptForName (const String& title, const String& initial)
+{
+    AlertWindow w (title, "Preset name:", MessageBoxIconType::NoIcon);
+    w.addTextEditor ("name", initial, {});
+    w.addButton ("OK",     1, KeyPress (KeyPress::returnKey));
+    w.addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+    if (w.runModalLoop() == 1)
+        return w.getTextEditorContents ("name").trim();
+    return {};
 }
 
 void IconMenu::setIcon()
@@ -148,6 +288,13 @@ void IconMenu::timerCallback()
         menu.addItem (1, "Preferences");
         menu.addItem (2, "Edit Plugins");
         menu.addItem (kShowWindowMenuId, "Show Editor Window");
+        // Presets switcher — change the active scene from the background.
+        {
+            PopupMenu presets;
+            for (int i = 0; i < store.getNumPresets(); ++i)
+                presets.addItem (INDEX_PRESET + i, store.getPresetName (i), true, i == store.getActiveIndex());
+            menu.addSubMenu ("Presets", presets);
+        }
         menu.addSeparator();
         menu.addSectionHeader ("Active Plugins");
         // The serial-chain ops (add/delete/move) rewrite the graph as a straight
@@ -224,6 +371,7 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     {
         if (id == 1)
         {
+            im->persistPresets();
             im->controller.save (settings);
             return JUCEApplication::getInstance()->quit();
         }
@@ -254,6 +402,10 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     // Show the main editor window
     if (id == kShowWindowMenuId)
         return im->showMainWindow();
+    // Preset switch (from the tray Presets submenu). Handled first so it never
+    // falls through to the serial chain-op decoding below.
+    if (id >= im->INDEX_PRESET && id < im->INDEX_PRESET + 1000000)
+        return im->switchToPreset (id - im->INDEX_PRESET);
     // Plugins
     if (id > 2)
     {
@@ -368,11 +520,16 @@ void IconMenu::showMainWindow()
     if (mainWindow == nullptr)
     {
         lighthost::ui::MainComponent::Callbacks cb;
-        cb.addPlugin   = [this] (juce::Point<int> p) { showAddPluginMenu (p); };
-        cb.openEditor  = [this] (const String& uid)  { openEditorForUid (uid); };
-        cb.preferences = [this] { showAudioSettings(); };
-        cb.editPlugins = [this] { reloadPlugins(); };
-        mainWindow = std::make_unique<lighthost::ui::MainWindow> (controller, std::move (cb));
+        cb.addPlugin    = [this] (juce::Point<int> p) { showAddPluginMenu (p); };
+        cb.openEditor   = [this] (const String& uid)  { openEditorForUid (uid); };
+        cb.preferences  = [this] { showAudioSettings(); };
+        cb.editPlugins  = [this] { reloadPlugins(); };
+        cb.selectPreset = [this] (int i) { switchToPreset (i); };
+        cb.addPreset    = [this] { addPreset(); };
+        cb.renamePreset = [this] (int i) { renamePreset (i); };
+        cb.savePreset   = [this] { saveActivePreset(); };
+        cb.deletePreset = [this] { deleteActivePreset(); };
+        mainWindow = std::make_unique<lighthost::ui::MainWindow> (controller, store, std::move (cb));
     }
 
     #if JUCE_MAC

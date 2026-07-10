@@ -13,6 +13,7 @@
 
 #include <JuceHeader.h>
 #include "../Engine/GraphController.h"
+#include "../Engine/PresetStore.h"
 #include "TitleBar.h"
 #include "CanvasView.h"
 
@@ -29,12 +30,19 @@ public:
         std::function<void (const juce::String& uid)>    openEditor;
         std::function<void()>                            preferences;
         std::function<void()>                            editPlugins;
+        // Presets (routed to IconMenu, which owns the store + does save/load).
+        std::function<void (int)>                        selectPreset;
+        std::function<void()>                            addPreset;
+        std::function<void (int)>                        renamePreset;
+        std::function<void()>                            savePreset;
+        std::function<void()>                            deletePreset;
     };
 
-    MainComponent (GraphController&, Callbacks);
+    MainComponent (GraphController&, const PresetStore&, Callbacks);
     ~MainComponent() override;
 
-    void refreshChain();   // rebuild cards after an external chain change
+    void refreshChain();     // rebuild cards after an external chain change
+    void refreshPresets();   // re-read the preset tabs after an external change
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -43,6 +51,7 @@ private:
     void timerCallback() override;
 
     GraphController& controller;
+    const PresetStore& presetStore;
     Callbacks callbacks;
 
     TitleBar       titleBar;
