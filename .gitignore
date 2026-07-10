@@ -8,3 +8,5 @@ cmake-build-*/
 .cache/
 CMakeUserPresets.json
 /CLAUDE.md
+/docs/
+/Resources/design-reference/
