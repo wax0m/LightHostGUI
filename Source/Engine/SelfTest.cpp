@@ -838,6 +838,46 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test J — node canvas positions are user-owned and survive chain edits
+    // (append / remove) that rebuild the graph. Guards the Cowork fix that stopped
+    // rewriteChainConnections / appendToChain from rewriting node x/y.
+    //==========================================================================
+    std::cout << "\n[J] node positions survive chain edits" << std::endl;
+    {
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, 44100.0, 512);
+        graph.prepareToPlay (44100.0, 512);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("positions");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        const String uid1 = controller.appendToChain (pA);
+        const String uid2 = controller.appendToChain (pA);   // two instances of pA is fine
+        r.expect (uid1.isNotEmpty() && uid2.isNotEmpty(), "two plugins instantiated");
+
+        // Distinct, non-default positions (getNodeX/Y default to 0.5f, so avoid 0.5).
+        controller.setNodePosition (uid1, 0.1f, 0.2f);
+        controller.setNodePosition (uid2, 0.8f, 0.9f);
+
+        // A structural edit that rebuilds the graph: add a third node then remove it.
+        const String uid3 = controller.appendToChain (pA);
+        r.expect (uid3.isNotEmpty(), "third plugin instantiated");
+        controller.removeFromChain (uid3);
+
+        const auto eq = [] (float a, float b) { return std::abs (a - b) < 1.0e-6f; };
+        r.expect (eq (controller.getNodeX (uid1), 0.1f) && eq (controller.getNodeY (uid1), 0.2f),
+                  "node 1 position unchanged after append + remove");
+        r.expect (eq (controller.getNodeX (uid2), 0.8f) && eq (controller.getNodeY (uid2), 0.9f),
+                  "node 2 position unchanged after append + remove");
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();
