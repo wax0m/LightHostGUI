@@ -13,6 +13,7 @@
 
 #include "../Source/Engine/MeterProcessor.h"
 #include "../Source/Engine/PassThroughProcessor.h"
+#include "../Source/Engine/MonoInputProcessor.h"
 #include "../Source/Engine/PluginBuses.h"
 #include <iostream>
 #include <cmath>
@@ -200,6 +201,25 @@ int runMeterTests (int& checks)
         const bool ok2 = lighthost::buses::forceStereo (monoOnly, 44100.0, 64);
         check (checks, ! ok2 && monoOnly.getTotalNumInputChannels() == 1,
                "forceStereo leaves a mono-only plugin untouched");
+    }
+
+    // --- 6. MonoInputProcessor sums L+R onto both channels ------------------
+    {
+        MonoInputProcessor mono;
+        AudioBuffer<float> buf (2, 4);
+        MidiBuffer m;
+
+        // Right-only input (a mic on the right channel): both channels get it.
+        for (int i = 0; i < 4; ++i) { buf.setSample (0, i, 0.0f); buf.setSample (1, i, 0.5f); }
+        mono.processBlock (buf, m);
+        check (checks, near (buf.getSample (0, 0), 0.5f) && near (buf.getSample (1, 0), 0.5f),
+               "mono: right-only input appears on both channels at full level");
+
+        // Distinct L/R fold to the sum on both channels.
+        for (int i = 0; i < 4; ++i) { buf.setSample (0, i, 0.4f); buf.setSample (1, i, -0.1f); }
+        mono.processBlock (buf, m);
+        check (checks, near (buf.getSample (0, 0), 0.3f) && near (buf.getSample (1, 0), 0.3f),
+               "mono: both channels become the L+R sum");
     }
 
     std::cout << (failures == 0 ? "  meters ok" : "  meters FAILED") << std::endl;

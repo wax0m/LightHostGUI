@@ -112,6 +112,7 @@ void GraphController::rebuild()
     inputMeter = outputMeter = nullptr;
     nodeStrips.clear();
     midiInputNode = nullptr;
+    monoNode = nullptr;
     missingPlugins.clear();
 
     using IOProcessor = AudioProcessorGraph::AudioGraphIOProcessor;
@@ -187,6 +188,7 @@ void GraphController::rebuild()
 
     insertNodeStrips();
     insertMasterMeters();
+    insertInputConditioner();
     insertMidiRouting();
 }
 
@@ -390,6 +392,55 @@ MeterProcessor* GraphController::spliceMeterAfter (AudioProcessorGraph::NodeID s
     return dynamic_cast<MeterProcessor*> (meterNode->getProcessor());
 }
 
+//==============================================================================
+// Mono input (runtime only). When enabled, a MonoInputProcessor is spliced right
+// after the audio-input node so everything downstream (input meter, plugins,
+// output) sees the input summed to mono on both channels.
+
+void GraphController::insertInputConditioner()
+{
+    monoNode = nullptr;
+    if (! monoInput)
+        return;
+
+    const auto itIn = uidToNodeId.find (document.getIoNodeUid (true));
+    if (itIn != uidToNodeId.end())
+        monoNode = spliceMonoAfter (itIn->second);
+}
+
+// Redirect every source -> Y connection through a new mono node: source -> mono -> Y.
+// Mirrors spliceMeterAfter but folds the stereo pair to mono.
+MonoInputProcessor* GraphController::spliceMonoAfter (AudioProcessorGraph::NodeID source)
+{
+    auto monoGraphNode = graph.addNode (std::make_unique<MonoInputProcessor>());
+    if (monoGraphNode == nullptr)
+        return nullptr;
+
+    const auto monoId = monoGraphNode->nodeID;
+
+    for (const auto& c : graph.getConnections())
+    {
+        if (c.source.nodeID == source && c.destination.nodeID != monoId)
+        {
+            graph.removeConnection (c);
+            graph.addConnection ({ { monoId, c.source.channelIndex }, c.destination });
+        }
+    }
+
+    for (int ch = 0; ch < MeterTap::numChannels; ++ch)
+        graph.addConnection ({ { source, ch }, { monoId, ch } });
+
+    return dynamic_cast<MonoInputProcessor*> (monoGraphNode->getProcessor());
+}
+
+void GraphController::setMonoInput (bool shouldSumToMono)
+{
+    if (monoInput == shouldSumToMono)
+        return;
+    monoInput = shouldSumToMono;
+    rewireConnections();   // re-splice runtime nodes live (no plugin reload)
+}
+
 const MeterTap* GraphController::getInputMeter() const noexcept
 {
     return inputMeter != nullptr ? &inputMeter->getTap() : nullptr;
@@ -545,7 +596,8 @@ void GraphController::rewireConnections()
     std::vector<AudioProcessorGraph::NodeID> runtimeNodes;
     for (auto* node : graph.getNodes())
         if (dynamic_cast<NodeStripProcessor*> (node->getProcessor()) != nullptr
-         || dynamic_cast<MeterProcessor*>     (node->getProcessor()) != nullptr)
+         || dynamic_cast<MeterProcessor*>     (node->getProcessor()) != nullptr
+         || dynamic_cast<MonoInputProcessor*> (node->getProcessor()) != nullptr)
             runtimeNodes.push_back (node->nodeID);
 
     for (auto id : runtimeNodes)
@@ -573,6 +625,7 @@ void GraphController::rewireConnections()
 
     insertNodeStrips();
     insertMasterMeters();
+    insertInputConditioner();
     insertMidiRouting();
 }
 

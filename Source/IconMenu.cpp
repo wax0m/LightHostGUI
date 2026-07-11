@@ -19,6 +19,7 @@
 // the per-plugin submenus use INDEX_* (>= 1,000,000), and KnownPluginList's
 // available-plugins ids start at 0x324503f4 — nothing else claims 3.
 static constexpr int kShowWindowMenuId = 3;
+static constexpr int kMonoInputMenuId  = 6;   // checkable "Mono Input" toggle
 
 class IconMenu::PluginListWindow : public DocumentWindow
 {
@@ -90,6 +91,8 @@ IconMenu::IconMenu() : INDEX_EDIT (1000000), INDEX_BYPASS (2000000), INDEX_DELET
     knownPluginList.addChangeListener (this);
     // Signal graph (migrates legacy chain settings on first run)
     controller.loadFrom (*getAppProperties().getUserSettings());
+    // Mono-input preference (app-global; sums a mono source to both channels).
+    controller.setMonoInput (getAppProperties().getUserSettings()->getBoolValue ("monoInput", false));
     // Presets: load the store, or seed a "Default" from the just-loaded graph.
     loadPresets();
     setIcon();
@@ -288,6 +291,7 @@ void IconMenu::timerCallback()
         menu.addItem (1, "Preferences");
         menu.addItem (2, "Edit Plugins");
         menu.addItem (kShowWindowMenuId, "Show Editor Window");
+        menu.addItem (kMonoInputMenuId, "Mono Input", true, controller.isMonoInput());
         // Presets switcher — change the active scene from the background.
         {
             PopupMenu presets;
@@ -402,6 +406,15 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     // Show the main editor window
     if (id == kShowWindowMenuId)
         return im->showMainWindow();
+    // Mono Input toggle (sum input to both channels). Persist + refresh the tick.
+    if (id == kMonoInputMenuId)
+    {
+        const bool on = ! im->controller.isMonoInput();
+        im->controller.setMonoInput (on);
+        settings.setValue ("monoInput", on);
+        settings.saveIfNeeded();
+        return im->startTimer (50);
+    }
     // Preset switch (from the tray Presets submenu). Handled first so it never
     // falls through to the serial chain-op decoding below.
     if (id >= im->INDEX_PRESET && id < im->INDEX_PRESET + 1000000)

@@ -265,20 +265,69 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     for (const auto& p : explicitPluginPaths)
         diagnosePlugin (formatManager, p);
 
+    Report r;
+
+    //==========================================================================
+    // Test L — mono input: sums a one-sided source onto both output channels.
+    //          Needs no plugin (bare in -> out passthrough), so it always runs.
+    //==========================================================================
+    std::cout << "\n[L] mono input sums to both channels" << std::endl;
+    {
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, 44100.0, 512);
+        graph.prepareToPlay (44100.0, 512);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("mono");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);   // empty document -> in -> out passthrough
+
+        AudioBuffer<float> block (2, 512);
+        MidiBuffer midi;
+        // A mono source arriving only on the RIGHT input channel (left silent).
+        auto drive = [&] (float& lRms, float& rRms)
+        {
+            for (int i = 0; i < 512; ++i) { block.setSample (0, i, 0.0f); block.setSample (1, i, 0.4f); }
+            midi.clear();
+            graph.processBlock (block, midi);
+            lRms = block.getRMSLevel (0, 0, 512);
+            rRms = block.getRMSLevel (1, 0, 512);
+        };
+
+        float l = 0, rr = 0;
+        controller.setMonoInput (false);
+        drive (l, rr);
+        r.expect (l < 1.0e-4f && rr > 0.0f, "mono OFF: right-only input stays right-only (left silent)");
+
+        controller.setMonoInput (true);
+        r.expect (controller.isMonoInput(), "isMonoInput reflects the enabled setting");
+        drive (l, rr);
+        r.expect (l > 0.0f && rr > 0.0f, "mono ON: right-only input now carries on BOTH channels");
+        r.expect (std::abs (l - rr) < 1.0e-4f, "mono ON: both output channels are equal");
+
+        controller.setMonoInput (false);
+        drive (l, rr);
+        r.expect (l < 1.0e-4f && rr > 0.0f, "mono toggled back OFF: left silent again (live re-splice)");
+
+        f.deleteFile();
+    }
+
     const Array<PluginDescription> plugins = discoverPlugins (formatManager, explicitPluginPaths, 2);
 
     if (plugins.isEmpty())
     {
-        std::cout << "SKIP: no loadable stereo VST3 found — nothing to test." << std::endl;
-        return 0;   // green on a plugin-less box
+        std::cout << "\nSKIP: no loadable stereo VST3 found — plugin-dependent tests skipped." << std::endl;
+        std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
+                  << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
+        std::cout.flush();
+        return r.failures == 0 ? 0 : 1;
     }
 
     const PluginDescription& pA = plugins.getReference (0);
     std::cout << "Using plugin A: " << pA.name << " (" << pA.pluginFormatName << ")" << std::endl;
     if (plugins.size() > 1)
         std::cout << "Using plugin B: " << plugins.getReference (1).name << std::endl;
-
-    Report r;
 
     //==========================================================================
     // Test A — two instances of the SAME plugin coexist as distinct live nodes.

@@ -20,6 +20,7 @@
 #include "PluginParameters.h"
 #include "PassThroughProcessor.h"
 #include "PluginBuses.h"
+#include "MonoInputProcessor.h"
 
 class GraphController
 {
@@ -83,6 +84,12 @@ public:
     GraphDocument snapshotDocument();
     bool isLinearChain() const;   // tray serial ops are only offered when true
 
+    // Mono input: sum the audio input to mono and feed both output channels, so a
+    // mono source that arrives on one channel (e.g. a mic on the right input) is
+    // heard on both. App-global setting; live re-splice, no plugin reload.
+    void setMonoInput (bool);
+    bool isMonoInput() const noexcept { return monoInput; }
+
     // MIDI routing (M7): host MIDI reaches plugins that acceptsMidi() and whose
     // per-node receivesMidi flag is set. Live re-splice, no plugin reload.
     void setNodeReceivesMidi (const String& uid, bool);
@@ -119,6 +126,9 @@ private:
     void insertMidiRouting();
     NodeStripProcessor* spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan);
 
+    void insertInputConditioner();   // splice the mono-collapse node when monoInput is on
+    MonoInputProcessor* spliceMonoAfter (AudioProcessorGraph::NodeID source);
+
     AudioProcessorGraph& graph;
     AudioPluginFormatManager& formatManager;
     std::map<String, AudioProcessorGraph::NodeID> uidToNodeId;
@@ -127,6 +137,8 @@ private:
     MeterProcessor* outputMeter = nullptr;
     std::map<String, NodeStripProcessor*> nodeStrips;   // plugin uid -> its strip (graph-owned)
     AudioProcessorGraph::Node::Ptr midiInputNode;       // runtime MIDI source (graph-owned)
+    bool monoInput = false;                             // sum input to mono, feed both channels
+    MonoInputProcessor* monoNode = nullptr;             // runtime mono-collapse node (graph-owned)
 
     JUCE_DECLARE_NON_COPYABLE (GraphController)
 };
