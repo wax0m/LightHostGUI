@@ -138,6 +138,10 @@ void GraphController::rebuild()
                 if (auto created = formatManager.createPluginInstance (*desc, graph.getSampleRate(),
                                                                        graph.getBlockSize(), errorMessage))
                 {
+                    // Promote mono-defaulting plugins (e.g. MAutoPitch) to stereo before
+                    // restoring state, so they don't collapse a channel in the stereo chain.
+                    lighthost::buses::forceStereo (*created, graph.getSampleRate(), graph.getBlockSize());
+
                     const String stateB64 = nodeTree.getProperty ("state").toString();
                     MemoryBlock stateBinary;
                     if (stateBinary.fromBase64Encoding (stateB64) && stateBinary.getSize() > 0)

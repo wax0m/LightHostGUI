@@ -13,6 +13,7 @@
 
 #include "../Source/Engine/MeterProcessor.h"
 #include "../Source/Engine/PassThroughProcessor.h"
+#include "../Source/Engine/PluginBuses.h"
 #include <iostream>
 #include <cmath>
 
@@ -29,6 +30,46 @@ namespace
     }
 
     bool near (float a, float b, float tol = 1.0e-4f) { return std::abs (a - b) <= tol; }
+
+    // Synthetic processor that instantiates MONO but optionally supports stereo, to
+    // exercise lighthost::buses::forceStereo without needing a real plugin.
+    struct ConfigurableProc : juce::AudioProcessor
+    {
+        explicit ConfigurableProc (bool supportsStereoIn)
+            : juce::AudioProcessor (BusesProperties()
+                  .withInput  ("In",  AudioChannelSet::mono(), true)
+                  .withOutput ("Out", AudioChannelSet::mono(), true)),
+              supportsStereo (supportsStereoIn) {}
+
+        bool supportsStereo;
+
+        bool isBusesLayoutSupported (const BusesLayout& l) const override
+        {
+            const auto in  = l.getMainInputChannelSet();
+            const auto out = l.getMainOutputChannelSet();
+            if (in != out) return false;
+            if (in == AudioChannelSet::mono())   return true;
+            if (in == AudioChannelSet::stereo()) return supportsStereo;
+            return false;
+        }
+
+        const String getName() const override { return "Cfg"; }
+        void prepareToPlay (double, int) override {}
+        void releaseResources() override {}
+        void processBlock (AudioBuffer<float>&, MidiBuffer&) override {}
+        double getTailLengthSeconds() const override { return 0.0; }
+        bool acceptsMidi() const override { return false; }
+        bool producesMidi() const override { return false; }
+        AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        int getNumPrograms() override { return 1; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram (int) override {}
+        const String getProgramName (int) override { return {}; }
+        void changeProgramName (int, const String&) override {}
+        void getStateInformation (MemoryBlock&) override {}
+        void setStateInformation (const void*, int) override {}
+    };
 }
 
 int runMeterTests (int& checks)
@@ -144,6 +185,21 @@ int runMeterTests (int& checks)
         check (checks, near (block.getSample (0, 0), 0.42f) && near (block.getSample (1, 0), -0.31f),
                "missing-plugin pass-through carries audio unchanged (chain not severed)");
         g.clear();
+    }
+
+    // --- 5. forceStereo promotes mono-default plugins that support stereo ----
+    {
+        ConfigurableProc stereoCapable (true);
+        check (checks, stereoCapable.getTotalNumInputChannels() == 1, "synthetic plugin instantiates mono");
+        const bool ok = lighthost::buses::forceStereo (stereoCapable, 44100.0, 64);
+        check (checks, ok && stereoCapable.getTotalNumInputChannels() == 2
+                          && stereoCapable.getTotalNumOutputChannels() == 2,
+               "forceStereo promotes a stereo-capable mono-default plugin to 2-in/2-out");
+
+        ConfigurableProc monoOnly (false);
+        const bool ok2 = lighthost::buses::forceStereo (monoOnly, 44100.0, 64);
+        check (checks, ! ok2 && monoOnly.getTotalNumInputChannels() == 1,
+               "forceStereo leaves a mono-only plugin untouched");
     }
 
     std::cout << (failures == 0 ? "  meters ok" : "  meters FAILED") << std::endl;

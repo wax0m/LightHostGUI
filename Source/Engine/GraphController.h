@@ -19,6 +19,7 @@
 #include "NodeStripProcessor.h"
 #include "PluginParameters.h"
 #include "PassThroughProcessor.h"
+#include "PluginBuses.h"
 
 class GraphController
 {
