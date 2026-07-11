@@ -112,6 +112,7 @@ void GraphController::rebuild()
     inputMeter = outputMeter = nullptr;
     nodeStrips.clear();
     midiInputNode = nullptr;
+    missingPlugins.clear();
 
     using IOProcessor = AudioProcessorGraph::AudioGraphIOProcessor;
 
@@ -130,21 +131,32 @@ void GraphController::rebuild()
             processor = std::make_unique<IOProcessor> (IOProcessor::audioOutputNode);
         else if (type == GraphDocument::typePlugin)
         {
+            std::unique_ptr<AudioProcessor> instance;
             if (auto desc = GraphDocument::getPluginDescription (nodeTree))
             {
                 String errorMessage;
-                auto instance = formatManager.createPluginInstance (*desc, graph.getSampleRate(),
-                                                                    graph.getBlockSize(), errorMessage);
-                if (instance != nullptr)
+                if (auto created = formatManager.createPluginInstance (*desc, graph.getSampleRate(),
+                                                                       graph.getBlockSize(), errorMessage))
                 {
                     const String stateB64 = nodeTree.getProperty ("state").toString();
                     MemoryBlock stateBinary;
                     if (stateBinary.fromBase64Encoding (stateB64) && stateBinary.getSize() > 0)
-                        instance->setStateInformation (stateBinary.getData(), (int) stateBinary.getSize());
-                    processor = std::move (instance);
+                        created->setStateInformation (stateBinary.getData(), (int) stateBinary.getSize());
+                    instance = std::move (created);
                 }
-                // nullptr: plugin missing/broken — node stays in the document,
-                // has no live counterpart, and its connections are skipped below.
+            }
+
+            if (instance != nullptr)
+            {
+                processor = std::move (instance);
+            }
+            else
+            {
+                // Plugin missing/broken: keep the node as a pass-through so it does
+                // NOT sever the chain. The card still shows "missing", and the saved
+                // plugin state is preserved (captureStates skips missing nodes).
+                processor = std::make_unique<PassThroughProcessor>();
+                missingPlugins.insert (uid);
             }
         }
 
@@ -182,6 +194,8 @@ void GraphController::captureStates()
         ValueTree nodeTree = nodes.getChild (i);
         if (nodeTree.getProperty ("type").toString() != GraphDocument::typePlugin)
             continue;
+        if (missingPlugins.count (nodeTree.getProperty ("uid").toString()) > 0)
+            continue;   // pass-through stand-in: keep the plugin's saved state intact
 
         if (auto* node = getNodeForUid (nodeTree.getProperty ("uid").toString()))
         {
@@ -205,7 +219,7 @@ std::vector<GraphController::ChainItem> GraphController::getChain() const
         item.uid      = chain[i];
         item.name     = node.getProperty ("name").toString();
         item.bypassed = (bool) node.getProperty ("bypassed", false);
-        item.missing  = uidToNodeId.find (item.uid) == uidToNodeId.end();
+        item.missing  = missingPlugins.count (item.uid) > 0;
         result.push_back (item);
     }
     return result;

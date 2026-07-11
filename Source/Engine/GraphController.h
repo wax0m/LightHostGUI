@@ -13,10 +13,12 @@
 #include <JuceHeader.h>
 #include <map>
 #include <vector>
+#include <set>
 #include "GraphDocument.h"
 #include "MeterProcessor.h"
 #include "NodeStripProcessor.h"
 #include "PluginParameters.h"
+#include "PassThroughProcessor.h"
 
 class GraphController
 {
@@ -118,6 +120,7 @@ private:
     AudioProcessorGraph& graph;
     AudioPluginFormatManager& formatManager;
     std::map<String, AudioProcessorGraph::NodeID> uidToNodeId;
+    std::set<String> missingPlugins;   // plugin nodes running as pass-through (failed to load)
     MeterProcessor* inputMeter  = nullptr;   // owned by the graph node, not us
     MeterProcessor* outputMeter = nullptr;
     std::map<String, NodeStripProcessor*> nodeStrips;   // plugin uid -> its strip (graph-owned)

@@ -12,6 +12,7 @@
 //
 
 #include "../Source/Engine/MeterProcessor.h"
+#include "../Source/Engine/PassThroughProcessor.h"
 #include <iostream>
 #include <cmath>
 
@@ -120,6 +121,29 @@ int runMeterTests (int& checks)
             check (checks, meter->getTap().read().peak[0] < 1.0e-4f, "in-graph meter reads silence as 0");
 
         graph.clear();
+    }
+
+    // --- 4. PassThroughProcessor is transparent in a live graph -------------
+    {
+        using IOProc = AudioProcessorGraph::AudioGraphIOProcessor;
+        AudioProcessorGraph g;
+        g.setPlayConfigDetails (2, 2, 44100.0, 64);
+        g.prepareToPlay (44100.0, 64);
+        auto in  = g.addNode (std::make_unique<IOProc> (IOProc::audioInputNode));
+        auto pt  = g.addNode (std::make_unique<PassThroughProcessor>());
+        auto out = g.addNode (std::make_unique<IOProc> (IOProc::audioOutputNode));
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            g.addConnection ({ { in->nodeID, ch }, { pt->nodeID,  ch } });
+            g.addConnection ({ { pt->nodeID, ch }, { out->nodeID, ch } });
+        }
+        AudioBuffer<float> block (2, 64);
+        for (int i = 0; i < 64; ++i) { block.setSample (0, i, 0.42f); block.setSample (1, i, -0.31f); }
+        MidiBuffer midi;
+        g.processBlock (block, midi);
+        check (checks, near (block.getSample (0, 0), 0.42f) && near (block.getSample (1, 0), -0.31f),
+               "missing-plugin pass-through carries audio unchanged (chain not severed)");
+        g.clear();
     }
 
     std::cout << (failures == 0 ? "  meters ok" : "  meters FAILED") << std::endl;
