@@ -49,6 +49,7 @@ void NodeCard::setupGainPanKnobs()
     knobA.setRange (0.0, 2.0);
     knobA.clearReadout();
     knobA.setValueQuiet (controller.getNodeGain (uid));
+    knobA.setDefault (1.0);   // double-click -> unity gain (0 dB)
     knobA.format = [] (double v) { return v <= 0.0001 ? juce::String ("-inf")
                                      : juce::Decibels::toString ((float) juce::Decibels::gainToDecibels (v), 1, -60.0f); };
     knobA.onValueChange = [this] (double v) { controller.setNodeGain (uid, (float) v); };
@@ -57,6 +58,7 @@ void NodeCard::setupGainPanKnobs()
     knobB.setRange (-1.0, 1.0);
     knobB.clearReadout();
     knobB.setValueQuiet (controller.getNodePan (uid));
+    knobB.setDefault (0.0);   // double-click -> centre pan
     knobB.format = [] (double v)
     {
         const int p = juce::roundToInt (std::abs (v) * 100.0);
@@ -80,6 +82,7 @@ void NodeCard::setupPluginParamKnobs (const std::vector<params::ParamInfo>& ps)
         k->setLabel (p.name);
         k->setRange (0.0, 1.0);              // normalized param value maps straight to the dial
         k->setValueQuiet (p.value);
+        k->setDefault (p.defaultValue);      // double-click -> the plugin's own default
         k->setReadout (p.text.isNotEmpty() ? p.text : juce::String (p.value, 2));
 
         const int idx = p.index;

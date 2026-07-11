@@ -36,6 +36,10 @@ public:
 
     void setValueQuiet (double v) { slider.setValue (v, juce::dontSendNotification); repaint(); }
 
+    // Double-clicking the knob returns it to `v` (fires onValueChange, so the
+    // controller/plugin update through the normal path).
+    void setDefault (double v) { slider.setDoubleClickReturnValue (true, v); }
+
     // Re-label / re-range the column (used when a knob is repurposed from the
     // host gain/pan strip to a hosted-plugin parameter).
     void setLabel (const juce::String& t) { label = t; repaint(); }

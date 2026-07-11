@@ -22,6 +22,7 @@ namespace lighthost::params
         juce::String name;           // human-readable parameter name
         juce::String label;          // unit suffix (e.g. "Hz", "dB"), may be empty
         float        value = 0.0f;   // current normalized value, 0..1
+        float        defaultValue = 0.0f;  // plugin's normalized default (for reset-to-default)
         juce::String text;           // current value formatted by the plugin
         bool         automatable = true;
         bool         boolean = false;
@@ -45,6 +46,7 @@ namespace lighthost::params
             info.name        = p->getName (128);
             info.label       = p->getLabel();
             info.value       = p->getValue();
+            info.defaultValue = p->getDefaultValue();
             info.text        = p->getCurrentValueAsText();
             info.automatable = p->isAutomatable();
             info.boolean     = p->isBoolean();

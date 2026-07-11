@@ -72,6 +72,10 @@ int runParamTests (int& checks)
         check (checks, all[2].boolean, "bool parameter flagged boolean");
         check (checks, near (all[1].value, 0.5f), "Gain default (0 dB in -15..15) is normalized 0.5");
         check (checks, all[0].value > 0.0f && all[0].value < 0.1f, "Freq default (1 kHz) sits low in a 20..20k range");
+
+        // defaultValue: the plugin's normalized default, surfaced for double-click reset.
+        check (checks, near (all[1].defaultValue, 0.5f), "Gain defaultValue is normalized 0.5 (0 dB)");
+        check (checks, near (all[2].defaultValue, 1.0f), "bool parameter defaultValue is 1.0 (on)");
     }
 
     // --- setValue drives the parameter, getValue reflects it ----------------
