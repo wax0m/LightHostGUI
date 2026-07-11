@@ -7,6 +7,9 @@ cmake-build-*/
 .idea/
 .cache/
 CMakeUserPresets.json
+CMakeSettings.json
+/out/
 /CLAUDE.md
 /docs/
 /Resources/design-reference/
+.claude/

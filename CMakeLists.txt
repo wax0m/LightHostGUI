@@ -92,6 +92,27 @@ target_link_libraries(LightHost PRIVATE
 )
 
 # ---------------------------------------------------------------------------
+# ASIO (Windows low-latency driver API). Steinberg's SDK is header-only and
+# freely downloadable but not redistributable, so it lives OUTSIDE the repo.
+# Point ASIO_SDK_DIR at the SDK root (the folder containing 'common') to compile
+# it in; leave it empty/invalid to build without ASIO (WASAPI exclusive mode is
+# still available). On this machine the path is set in the local, untracked
+# CMakeSettings.json. Defining JUCE_ASIO=1 + the common/ include path is the
+# standard JUCE requirement: it enables the ASIO backend in juce_audio_devices,
+# which AudioDeviceSelectorComponent then lists automatically.
+# ---------------------------------------------------------------------------
+set(ASIO_SDK_DIR "" CACHE PATH
+    "Steinberg ASIO SDK root (folder containing 'common'); empty/invalid = build without ASIO")
+
+if(WIN32 AND ASIO_SDK_DIR AND EXISTS "${ASIO_SDK_DIR}/common/iasiodrv.h")
+    target_compile_definitions(LightHost PRIVATE JUCE_ASIO=1)
+    target_include_directories(LightHost PRIVATE "${ASIO_SDK_DIR}/common")
+    message(STATUS "ASIO enabled: ${ASIO_SDK_DIR}")
+else()
+    message(STATUS "ASIO SDK not found; building without ASIO (WASAPI exclusive still available)")
+endif()
+
+# ---------------------------------------------------------------------------
 # Headless unit tests (off by default). Exercises the graph document model
 # with no audio device / real plugins / display, so it runs in CI or a sandbox.
 #   cmake -B build -DLIGHTHOST_BUILD_TESTS=ON
