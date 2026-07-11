@@ -99,6 +99,7 @@ public:
     std::vector<lighthost::params::ParamInfo> getNodeCardParameters (const String& uid, int count) const;
     void  setNodeParameter (const String& uid, int index, float normalized);
     float getNodeParameter (const String& uid, int index) const;
+    String getNodeParameterText (const String& uid, int index) const;   // plugin's own value text
 
     GraphDocument document;
 

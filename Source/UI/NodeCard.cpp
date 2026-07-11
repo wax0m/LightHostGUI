@@ -86,7 +86,11 @@ void NodeCard::setupPluginParamKnobs (const std::vector<params::ParamInfo>& ps)
         k->setReadout (p.text.isNotEmpty() ? p.text : juce::String (p.value, 2));
 
         const int idx = p.index;
-        k->onValueChange = [this, idx] (double v) { controller.setNodeParameter (uid, idx, (float) v); };
+        k->onValueChange = [this, idx, k] (double v)
+        {
+            controller.setNodeParameter (uid, idx, (float) v);
+            k->setReadout (controller.getNodeParameterText (uid, idx));   // live update while dragging
+        };
     }
 
     // A plugin exposing a single parameter leaves the second column empty.

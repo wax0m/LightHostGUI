@@ -525,6 +525,14 @@ float GraphController::getNodeParameter (const String& uid, int index) const
     return 0.0f;
 }
 
+String GraphController::getNodeParameterText (const String& uid, int index) const
+{
+    if (auto* node = getNodeForUid (uid))
+        if (auto* proc = node->getProcessor())
+            return lighthost::params::valueText (*proc, index);
+    return {};
+}
+
 //==============================================================================
 // Arbitrary routing (M6). Re-derive only the connection topology + runtime
 // strip/meter nodes from the document, keeping plugin/IO nodes (and their live

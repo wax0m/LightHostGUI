@@ -83,4 +83,14 @@ namespace lighthost::params
             return 0.0f;
         return params.getUnchecked (index)->getValue();
     }
+
+    // The plugin's own formatted text for parameter `index` (its getCurrentValueAsText).
+    // Used to update a card knob's readout live while the user drags it.
+    inline juce::String valueText (juce::AudioProcessor& proc, int index)
+    {
+        const auto& params = proc.getParameters();
+        if (index < 0 || index >= params.size())
+            return {};
+        return params.getUnchecked (index)->getCurrentValueAsText();
+    }
 }
