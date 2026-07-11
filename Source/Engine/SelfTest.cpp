@@ -119,6 +119,137 @@ namespace
         o.commonToAllUsers = false;
         return std::make_unique<PropertiesFile> (f, o);
     }
+
+    //==========================================================================
+    // Plugin capability report. Runs for each explicitly-passed plugin path to
+    // characterise a plugin that misbehaves in the chain (bus layout, latency,
+    // params, and whether it actually alters / outputs a test tone). Purely
+    // diagnostic — does not affect the pass/fail count.
+    void diagnosePlugin (AudioPluginFormatManager& fm, const String& path)
+    {
+        std::cout << "\n================ PLUGIN DIAGNOSTIC ================\n";
+        std::cout << "Path: " << path << std::endl;
+
+        PluginDescription desc;
+        bool found = false;
+        for (auto* format : fm.getFormats())
+        {
+            OwnedArray<PluginDescription> types;
+            format->findAllTypesForFile (types, path);
+            if (! types.isEmpty()) { desc = *types[0]; found = true; break; }
+        }
+        if (! found) { std::cout << "  could not identify a plugin at that path\n"; return; }
+
+        const double sr = 48000.0;
+        const int    block = 512;
+        String err;
+        auto inst = fm.createPluginInstance (desc, sr, block, err);
+        if (inst == nullptr) { std::cout << "  createPluginInstance FAILED: " << err << "\n"; return; }
+
+        auto busReport = [&] (bool input)
+        {
+            const int n = inst->getBusCount (input);
+            std::cout << "  " << (input ? "in " : "out") << " buses=" << n;
+            for (int i = 0; i < n; ++i)
+                if (auto* bus = inst->getBus (input, i))
+                    std::cout << "  [" << i << " " << bus->getCurrentLayout().getDescription()
+                              << (bus->isEnabled() ? "" : " DISABLED") << "]";
+            std::cout << "  totalCh=" << (input ? inst->getTotalNumInputChannels()
+                                                : inst->getTotalNumOutputChannels()) << "\n";
+        };
+
+        std::cout << "Name: " << inst->getName() << "  format=" << desc.pluginFormatName
+                  << "  isInstrument=" << (desc.isInstrument ? 1 : 0) << "\n";
+        std::cout << "BEFORE forceStereo:\n"; busReport (true); busReport (false);
+
+        const bool nowStereo = lighthost::buses::forceStereo (*inst, sr, block);
+        std::cout << "forceStereo -> " << (nowStereo ? "2-in/2-out OK" : "NOT 2/2") << "\n";
+        std::cout << "AFTER forceStereo:\n"; busReport (true); busReport (false);
+
+        inst->prepareToPlay (sr, block);
+        std::cout << "latencySamples=" << inst->getLatencySamples()
+                  << "  tailSeconds=" << inst->getTailLengthSeconds() << "\n";
+
+        auto ps = lighthost::params::collect (*inst, false);
+        std::cout << "params (" << ps.size() << "):\n";
+        for (size_t i = 0; i < ps.size() && i < 30; ++i)
+            std::cout << "  [" << ps[i].index << "] " << ps[i].name << " = " << ps[i].value
+                      << " '" << ps[i].text << "'" << (ps[i].automatable ? "" : " (non-autom)") << "\n";
+
+        // Drive DISTINCT L/R sines (L=445, R=311 Hz) long enough to exceed latency,
+        // so a stereo->mono collapse (outL==outR) or a dead channel (outR~0) shows up.
+        const int nCh     = jmax (2, inst->getTotalNumInputChannels(), inst->getTotalNumOutputChannels());
+        const int latency = inst->getLatencySamples();
+        const int warm    = jmax (128, latency / block + 64);
+        auto fillDistinct = [] (AudioBuffer<float>& buf, double& pL, double& pR, double dL, double dR)
+        {
+            const int n = buf.getNumSamples();
+            for (int i = 0; i < n; ++i)
+            {
+                const float l = 0.5f * (float) std::sin (pL); pL += dL;
+                const float r = 0.5f * (float) std::sin (pR); pR += dR;
+                if (buf.getNumChannels() > 0) buf.setSample (0, i, l);
+                if (buf.getNumChannels() > 1) buf.setSample (1, i, r);
+                for (int ch = 2; ch < buf.getNumChannels(); ++ch) buf.setSample (ch, i, 0.0f);
+            }
+        };
+        const double dL = 2.0 * MathConstants<double>::pi * 445.0 / sr;
+        const double dR = 2.0 * MathConstants<double>::pi * 311.0 / sr;
+
+        {   // (a) plugin processed DIRECTLY
+            AudioBuffer<float> buffer (nCh, block);
+            MidiBuffer midi;
+            double pL = 0.0, pR = 0.0;
+            float outL = 0, outR = 0, diffLR = 0;
+            for (int b = 0; b < warm; ++b)
+            {
+                fillDistinct (buffer, pL, pR, dL, dR);
+                midi.clear();
+                inst->processBlock (buffer, midi);
+                outL = buffer.getRMSLevel (0, 0, block);
+                outR = nCh > 1 ? buffer.getRMSLevel (1, 0, block) : 0.0f;
+                if (nCh > 1) { float s = 0; for (int i = 0; i < block; ++i) s += std::abs (buffer.getSample(0,i) - buffer.getSample(1,i)); diffLR = s / block; }
+            }
+            std::cout << "DIRECT (L=445,R=311): out RMS L=" << outL << " R=" << outR
+                      << "  mean|L-R|=" << diffLR << "\n";
+            std::cout << (outL < 1e-4f && outR < 1e-4f ? "  => NO OUTPUT\n"
+                        : (outL < 1e-4f || outR < 1e-4f ? "  => ONE CHANNEL DEAD\n"
+                        : (diffLR < 1e-4f ? "  => STEREO COLLAPSED TO MONO\n" : "  => stereo preserved\n")));
+            inst->releaseResources();
+        }
+
+        {   // (b) plugin through the real GraphController (app's routing incl. strip/meter)
+            AudioProcessorGraph graph;
+            graph.setPlayConfigDetails (2, 2, sr, block);
+            graph.prepareToPlay (sr, block);
+            GraphController controller (graph, fm);
+            const File f = tempSettingsFile ("diag");
+            f.deleteFile();
+            auto settings = makeSettings (f);
+            controller.loadFrom (*settings);
+            const String uid = controller.appendToChain (desc);
+            AudioBuffer<float> buffer (2, block);
+            MidiBuffer midi;
+            double pL = 0.0, pR = 0.0;
+            float outL = 0, outR = 0, diffLR = 0;
+            for (int b = 0; b < warm; ++b)
+            {
+                fillDistinct (buffer, pL, pR, dL, dR);
+                midi.clear();
+                graph.processBlock (buffer, midi);
+                outL = buffer.getRMSLevel (0, 0, block);
+                outR = buffer.getRMSLevel (1, 0, block);
+                { float s = 0; for (int i = 0; i < block; ++i) s += std::abs (buffer.getSample(0,i) - buffer.getSample(1,i)); diffLR = s / block; }
+            }
+            std::cout << "VIA GRAPH (in->plugin->strip->out): out RMS L=" << outL << " R=" << outR
+                      << "  mean|L-R|=" << diffLR << "  uid=" << (uid.isNotEmpty() ? "ok" : "EMPTY") << "\n";
+            std::cout << (outL < 1e-4f && outR < 1e-4f ? "  => NO OUTPUT via graph\n"
+                        : (outL < 1e-4f || outR < 1e-4f ? "  => ONE CHANNEL DEAD via graph\n"
+                        : (diffLR < 1e-4f ? "  => STEREO COLLAPSED TO MONO via graph\n" : "  => stereo preserved via graph\n")));
+            f.deleteFile();
+        }
+        std::cout << "===================================================\n";
+    }
 }
 
 //==============================================================================
@@ -128,6 +259,11 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     addDefaultFormatsToManager (formatManager);   // JUCE 8: free function replaces addDefaultFormats()
 
     std::cout << "GraphController runtime self-test (real VST3 plugins)" << std::endl;
+
+    // Explicitly-passed plugin paths get a capability report first (diagnostic for
+    // "plugin X misbehaves in the chain"); auto-discovery runs are unaffected.
+    for (const auto& p : explicitPluginPaths)
+        diagnosePlugin (formatManager, p);
 
     const Array<PluginDescription> plugins = discoverPlugins (formatManager, explicitPluginPaths, 2);
 
