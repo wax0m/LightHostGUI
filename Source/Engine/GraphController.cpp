@@ -111,6 +111,7 @@ void GraphController::rebuild()
     uidToNodeId.clear();
     inputMeter = outputMeter = nullptr;
     nodeStrips.clear();
+    nodeMixes.clear();
     midiInputNode = nullptr;
     monoNode = nullptr;
     missingPlugins.clear();
@@ -460,6 +461,7 @@ const MeterTap* GraphController::getOutputMeter() const noexcept
 void GraphController::insertNodeStrips()
 {
     nodeStrips.clear();
+    nodeMixes.clear();
 
     ValueTree nodes = document.getNodes();
     for (int i = 0; i < nodes.getNumChildren(); ++i)
@@ -473,14 +475,24 @@ void GraphController::insertNodeStrips()
         if (it == uidToNodeId.end())
             continue;   // plugin missing/broken: no live node, so no strip
 
-        if (auto* strip = spliceStripAfter (it->second, document.getGain (uid), document.getPan (uid)))
+        auto* stripNode = spliceStripAfter (it->second, document.getGain (uid), document.getPan (uid));
+        if (stripNode == nullptr)
+            continue;
+
+        if (auto* strip = dynamic_cast<NodeStripProcessor*> (stripNode->getProcessor()))
             nodeStrips[uid] = strip;
+
+        // Dry/wet: only splice the parallel dry branch when the node is not fully
+        // wet, so a default graph (all mix == 1) is byte-for-byte the old topology.
+        const float mix = document.getMix (uid);
+        if (mix < 1.0f)
+            insertMixNode (it->second, stripNode->nodeID, uid, mix);
     }
 }
 
 // source -> strip -> (old destinations of source). Mirrors spliceMeterAfter but
-// carries the node's gain/pan.
-NodeStripProcessor* GraphController::spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan)
+// carries the node's gain/pan. Returns the live strip node (for the mix splice).
+AudioProcessorGraph::Node* GraphController::spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan)
 {
     auto stripNode = graph.addNode (std::make_unique<NodeStripProcessor>());
     if (stripNode == nullptr)
@@ -500,13 +512,64 @@ NodeStripProcessor* GraphController::spliceStripAfter (AudioProcessorGraph::Node
     for (int ch = 0; ch < MeterTap::numChannels; ++ch)
         graph.addConnection ({ { source, ch }, { stripId, ch } });
 
-    auto* strip = dynamic_cast<NodeStripProcessor*> (stripNode->getProcessor());
-    if (strip != nullptr)
+    if (auto* strip = dynamic_cast<NodeStripProcessor*> (stripNode->getProcessor()))
     {
         strip->setGain (gain);
         strip->setPan  (pan);
     }
-    return strip;
+    return stripNode.get();
+}
+
+// Insert a dry/wet mix node between a plugin and its (already-spliced) strip:
+//
+//   before:  [srcs] -> plugin -> strip -> ...
+//   after:   [srcs] -> plugin --wet--> mix -> strip -> ...
+//                \-----------------dry--> mix
+//
+// The plugin's current INPUT connections are its true dry sources (the strip
+// splice only touched the plugin's OUTPUTS, so they are still intact here). We
+// read them live rather than from the document, so the dry tap always reflects
+// whatever actually feeds the plugin -- including upstream strips, which get
+// rerouted onto this dry edge automatically when they are spliced.
+void GraphController::insertMixNode (AudioProcessorGraph::NodeID pluginId,
+                                     AudioProcessorGraph::NodeID stripId,
+                                     const String& uid, float mix)
+{
+    auto mixNode = graph.addNode (std::make_unique<MixProcessor>());
+    if (mixNode == nullptr)
+        return;
+
+    const auto mixId = mixNode->nodeID;
+
+    // Capture the plugin's dry input sources (audio channels 0/1 only -- MIDI is
+    // spliced later and uses a sentinel channel index).
+    std::vector<AudioProcessorGraph::Connection> dryInputs;
+    for (const auto& c : graph.getConnections())
+        if (c.destination.nodeID == pluginId
+            && c.destination.channelIndex >= 0 && c.destination.channelIndex < MeterTap::numChannels)
+            dryInputs.push_back (c);
+
+    // Reroute plugin -> strip  into  plugin -> mix(wet 0,1) and mix -> strip.
+    for (const auto& c : graph.getConnections())
+    {
+        if (c.source.nodeID == pluginId && c.destination.nodeID == stripId)
+            graph.removeConnection (c);
+    }
+    for (int ch = 0; ch < MeterTap::numChannels; ++ch)
+    {
+        graph.addConnection ({ { pluginId, ch }, { mixId,   ch } });   // wet in
+        graph.addConnection ({ { mixId,    ch }, { stripId, ch } });   // blended out
+    }
+
+    // Dry branch: the plugin's own inputs, in parallel, into mix channels 2,3.
+    for (const auto& c : dryInputs)
+        graph.addConnection ({ c.source, { mixId, c.destination.channelIndex + MeterTap::numChannels } });
+
+    if (auto* m = dynamic_cast<MixProcessor*> (mixNode->getProcessor()))
+    {
+        m->setMix (mix);
+        nodeMixes[uid] = m;
+    }
 }
 
 void GraphController::setNodeGain (const String& uid, float gain)
@@ -539,6 +602,30 @@ const MeterTap* GraphController::getNodeMeter (const String& uid) const noexcept
 {
     const auto it = nodeStrips.find (uid);
     return (it != nodeStrips.end() && it->second != nullptr) ? &it->second->getTap() : nullptr;
+}
+
+void GraphController::setNodeMix (const String& uid, float mix)
+{
+    mix = jlimit (0.0f, 1.0f, mix);
+    document.setMix (uid, mix);
+
+    const auto it = nodeMixes.find (uid);
+    if (it != nodeMixes.end() && it->second != nullptr)
+    {
+        it->second->setMix (mix);   // branch exists: apply live, no rewire
+    }
+    else if (mix < 1.0f)
+    {
+        // No dry branch yet and the node is no longer fully wet: build it. A
+        // rewire re-splices runtime nodes only -- plugins are not reloaded.
+        rewireConnections();
+    }
+    // No branch + mix == 1.0: nothing to do (already pure wet).
+}
+
+float GraphController::getNodeMix (const String& uid) const
+{
+    return document.getMix (uid);
 }
 
 //==============================================================================
@@ -597,7 +684,8 @@ void GraphController::rewireConnections()
     for (auto* node : graph.getNodes())
         if (dynamic_cast<NodeStripProcessor*> (node->getProcessor()) != nullptr
          || dynamic_cast<MeterProcessor*>     (node->getProcessor()) != nullptr
-         || dynamic_cast<MonoInputProcessor*> (node->getProcessor()) != nullptr)
+         || dynamic_cast<MonoInputProcessor*> (node->getProcessor()) != nullptr
+         || dynamic_cast<MixProcessor*>       (node->getProcessor()) != nullptr)
             runtimeNodes.push_back (node->nodeID);
 
     for (auto id : runtimeNodes)

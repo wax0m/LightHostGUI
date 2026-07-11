@@ -1141,6 +1141,100 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test M -- per-node dry/wet mix: the parallel dry branch carries the plugin's
+    //          input. The plugin is BYPASSED, so wet == dry == the injected noise;
+    //          the node's post-mix OUT meter must therefore read the SAME non-zero
+    //          level at mix=1 (pure wet) and mix=0 (pure dry). If the dry branch
+    //          were mis-wired/silent, mix=0 would collapse to ~0 while mix=1 stayed
+    //          up -- the equality catch is what proves the dry path exists. (The
+    //          blend MATH is proven deterministically in the headless MixTests;
+    //          here we prove the real-plugin graph integration wires it correctly.)
+    //          Also exercises the live 1.0 -> <1.0 rewire that builds the branch.
+    //==========================================================================
+    std::cout << "\n[M] per-node dry/wet mix" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("mix");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        const String uid = controller.appendToChain (pA);
+        r.expect (uid.isNotEmpty(), "mix-test plugin instantiated");
+        r.expect (std::abs (controller.getNodeMix (uid) - 1.0f) < 1.0e-6f, "default mix is fully wet");
+
+        controller.setBypassed (uid, true);   // wet == dry == input noise (deterministic)
+
+        Random rng (0x3d1cef);
+        AudioBuffer<float> block (2, blockSize);
+        MidiBuffer midi;
+
+        // Drive `count` noise blocks; report the max node-OUT peak over that phase.
+        // The strip (and its meter) is re-spliced on the mix rewire, so re-fetch the
+        // tap each block (cf. MainComponent's per-tick re-fetch).
+        auto drive = [&] (int count) -> float
+        {
+            float peak = 0.0f;
+            for (int b = 0; b < count; ++b)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    float* d = block.getWritePointer (ch);
+                    for (int i = 0; i < blockSize; ++i)
+                        d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
+                }
+                midi.clear();
+                graph.processBlock (block, midi);
+                if (const MeterTap* m = controller.getNodeMeter (uid))
+                {
+                    const auto lv = m->read();
+                    peak = jmax (peak, lv.peak[0], lv.peak[1]);
+                }
+            }
+            return peak;
+        };
+
+        // mix = 1.0 (fully wet): no dry branch yet -- pure plugin (bypassed) output.
+        const float wetPeak = drive (40);
+        r.expect (wetPeak > 0.0f, "node meter registers signal at mix=1 (fully wet)");
+
+        // mix = 0.0 (fully dry): first drop below 1.0 rewires in the dry branch.
+        controller.setNodeMix (uid, 0.0f);
+        r.expect (std::abs (controller.getNodeMix (uid)) < 1.0e-6f, "getNodeMix reflects the fully-dry setting");
+        const float dryPeak = drive (40);
+        r.expect (dryPeak > 0.0f, "node meter still registers signal at mix=0 (dry branch carries the input)");
+        r.expect (std::abs (dryPeak - wetPeak) < 0.15f * jmax (wetPeak, 1.0e-6f),
+                  "with the plugin bypassed, dry and wet blends read the same level");
+
+        // mix = 0.5: branch already present, applied live via the atomic.
+        controller.setNodeMix (uid, 0.5f);
+        r.expect (std::abs (controller.getNodeMix (uid) - 0.5f) < 1.0e-6f, "getNodeMix reflects the half setting");
+        const float halfPeak = drive (40);
+        r.expect (halfPeak > 0.0f, "node meter registers signal at mix=0.5");
+
+        // Back to fully wet: mix persists in the document across a save/reload.
+        controller.setNodeMix (uid, 0.5f);
+        controller.save (*settings);
+        {
+            AudioProcessorGraph g2;
+            g2.setPlayConfigDetails (2, 2, sr, blockSize);
+            g2.prepareToPlay (sr, blockSize);
+            GraphController c2 (g2, formatManager);
+            c2.loadFrom (*settings);
+            r.expect (std::abs (c2.getNodeMix (uid) - 0.5f) < 1.0e-6f, "mix survives save() -> fresh loadFrom()");
+        }
+
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();

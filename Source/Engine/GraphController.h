@@ -21,6 +21,7 @@
 #include "PassThroughProcessor.h"
 #include "PluginBuses.h"
 #include "MonoInputProcessor.h"
+#include "MixProcessor.h"
 
 class GraphController
 {
@@ -68,6 +69,13 @@ public:
     void  setNodePan  (const String& uid, float pan);
     float getNodePan  (const String& uid) const;
     const MeterTap* getNodeMeter (const String& uid) const noexcept;
+
+    // Per-node dry/wet mix: 0 = fully dry (plugin bypassed in the blend), 1 = fully
+    // wet (default; current behaviour). Persists in the document. When a node first
+    // goes below 1.0 the parallel dry branch is spliced in (a live rewire, no plugin
+    // reload); once the branch exists, mix changes apply live via the atomic.
+    void  setNodeMix (const String& uid, float mix);
+    float getNodeMix (const String& uid) const;
 
     //==============================================================================
     // Arbitrary routing (M6). connect/disconnect validate + edit the document, then
@@ -124,7 +132,11 @@ private:
 
     void insertNodeStrips();
     void insertMidiRouting();
-    NodeStripProcessor* spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan);
+    AudioProcessorGraph::Node* spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan);
+    // Splice a dry/wet mix node between a plugin and its strip: plugin -> mix(wet) -> strip,
+    // with the plugin's own input sources tapped in parallel into mix's dry inputs.
+    void insertMixNode (AudioProcessorGraph::NodeID pluginId, AudioProcessorGraph::NodeID stripId,
+                        const String& uid, float mix);
 
     void insertInputConditioner();   // splice the mono-collapse node when monoInput is on
     MonoInputProcessor* spliceMonoAfter (AudioProcessorGraph::NodeID source);
@@ -136,6 +148,7 @@ private:
     MeterProcessor* inputMeter  = nullptr;   // owned by the graph node, not us
     MeterProcessor* outputMeter = nullptr;
     std::map<String, NodeStripProcessor*> nodeStrips;   // plugin uid -> its strip (graph-owned)
+    std::map<String, MixProcessor*> nodeMixes;          // plugin uid -> its dry/wet mix node (graph-owned), only when mix < 1
     AudioProcessorGraph::Node::Ptr midiInputNode;       // runtime MIDI source (graph-owned)
     bool monoInput = false;                             // sum input to mono, feed both channels
     MonoInputProcessor* monoNode = nullptr;             // runtime mono-collapse node (graph-owned)

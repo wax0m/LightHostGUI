@@ -55,6 +55,8 @@ public:
     float getPan  (const String& uid) const;    // -1..+1 balance, default 0
     void  setReceivesMidi (const String& uid, bool);
     bool  getReceivesMidi (const String& uid) const;   // default true; gates host MIDI to this node
+    void  setMix  (const String& uid, float);
+    float getMix  (const String& uid) const;   // dry/wet, 0=dry 1=wet, default 1.0 (fully wet)
     void setPluginState (const String& uid, const String& base64);
     String getPluginState (const String& uid) const;
     void clearAllPluginStates();
