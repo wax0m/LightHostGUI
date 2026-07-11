@@ -243,17 +243,22 @@ void CanvasView::tick()
 }
 
 //== Geometry ==================================================================
+// Node positions map over the ACTUAL canvas size (getWidth()/getHeight()), not the
+// virtualW/virtualH content-minimum: applyCanvasSize() grows the component to fill the
+// viewport, so mapping over the real size lets nodes reach the whole filled area (no
+// dead gap on the right/bottom). getWidth() == jmax(virtualW, visibleW), so this also
+// handles window grow/shrink, and place<->persist stay consistent (both read live size).
 juce::Point<int> CanvasView::centreForNorm (float nx, float ny) const
 {
-    const int x = marginX + juce::roundToInt (juce::jlimit (0.0f, 1.0f, nx) * (float) (virtualW - 2 * marginX));
-    const int y = marginY + juce::roundToInt (juce::jlimit (0.0f, 1.0f, ny) * (float) (virtualH - 2 * marginY));
+    const int x = marginX + juce::roundToInt (juce::jlimit (0.0f, 1.0f, nx) * (float) (getWidth()  - 2 * marginX));
+    const int y = marginY + juce::roundToInt (juce::jlimit (0.0f, 1.0f, ny) * (float) (getHeight() - 2 * marginY));
     return { x, y };
 }
 
 juce::Point<float> CanvasView::normForCentre (juce::Point<int> centre) const
 {
-    const float nx = (float) (centre.x - marginX) / (float) (virtualW - 2 * marginX);
-    const float ny = (float) (centre.y - marginY) / (float) (virtualH - 2 * marginY);
+    const float nx = (float) (centre.x - marginX) / (float) (getWidth()  - 2 * marginX);
+    const float ny = (float) (centre.y - marginY) / (float) (getHeight() - 2 * marginY);
     return { juce::jlimit (0.0f, 1.0f, nx), juce::jlimit (0.0f, 1.0f, ny) };
 }
 
@@ -268,8 +273,8 @@ void CanvasView::moveNodeBy (const juce::String& uid, juce::Point<int> delta)
     if (const auto* v = viewForUid (uid))
     {
         auto* c = v->comp;
-        int x = juce::jlimit (0, virtualW - c->getWidth(),  c->getX() + delta.x);
-        int y = juce::jlimit (0, virtualH - c->getHeight(), c->getY() + delta.y);
+        int x = juce::jlimit (0, getWidth()  - c->getWidth(),  c->getX() + delta.x);
+        int y = juce::jlimit (0, getHeight() - c->getHeight(), c->getY() + delta.y);
         c->setTopLeftPosition (x, y);
         repaint();                  // redraw cables to follow the node live
     }
