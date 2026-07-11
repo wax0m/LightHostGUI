@@ -77,6 +77,12 @@ target_compile_definitions(LightHost PRIVATE
     # Existing code uses modal loops (DialogWindow::runModal) — off by default in JUCE 8.
     JUCE_MODAL_LOOPS_PERMITTED=1
 
+    # As a HOST we load third-party plugins; some (e.g. LoudMax) call beginEdit twice
+    # without a matching endEdit, tripping JUCE's debug-only begin/end-gesture
+    # consistency assert. We make no gesture calls ourselves, so disable the check
+    # (debug-only; no effect on Release).
+    JUCE_DISABLE_AUDIOPROCESSOR_BEGIN_END_GESTURE_CHECKING=1
+
     JUCE_DISPLAY_SPLASH_SCREEN=0    # allowed: this project is GPLv3
 
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:LightHost,JUCE_PRODUCT_NAME>"
