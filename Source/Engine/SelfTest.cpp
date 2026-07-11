@@ -878,6 +878,84 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test K — a plugin that FAILS TO LOAD runs as a pass-through: the chain is
+    // NOT severed. Fabricate an un-loadable description (a real plugin's fields
+    // pointed at a nonexistent file), append it, and prove the node is reported
+    // missing yet white noise still reaches the output meter (audio flows through
+    // the missing slot) and decays to ~0 on silence.
+    //==========================================================================
+    std::cout << "\n[K] missing plugin passes audio through" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("missing");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        // An intentionally un-loadable plugin: pA's fields, but the file it would
+        // load from does not exist, so createPluginInstance must fail.
+        PluginDescription bogus = pA;
+        bogus.name             = "DeliberatelyMissing";
+        bogus.fileOrIdentifier = File::getSpecialLocation (File::tempDirectory)
+                                     .getChildFile ("lighthost_no_such_plugin_zzz.vst3")
+                                     .getFullPathName();
+
+        const String uid = controller.appendToChain (bogus);
+        r.expect (uid.isNotEmpty(), "missing plugin still produces a live node (pass-through stand-in)");
+
+        const auto chain = controller.getChain();
+        r.expect (chain.size() == 1, "chain holds the one (missing) plugin slot");
+        if (chain.size() == 1)
+            r.expect (chain[0].missing, "the un-loadable plugin is reported missing");
+
+        AudioBuffer<float> block (2, blockSize);
+        MidiBuffer midi;
+        Random rng (0x0badf00d);
+
+        const MeterTap* outMeter = controller.getOutputMeter();
+        r.expect (outMeter != nullptr, "output meter present with a missing plugin in the chain");
+
+        auto driveNoise = [&] (int count)
+        {
+            float maxPeak = 0.0f;
+            for (int b = 0; b < count; ++b)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    float* d = block.getWritePointer (ch);
+                    for (int i = 0; i < blockSize; ++i)
+                        d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
+                }
+                midi.clear();
+                graph.processBlock (block, midi);
+                if (outMeter != nullptr)
+                    maxPeak = jmax (maxPeak, outMeter->read().peak[0]);
+            }
+            return maxPeak;
+        };
+
+        auto driveSilence = [&] (int count)
+        {
+            block.clear();
+            for (int b = 0; b < count; ++b) { midi.clear(); graph.processBlock (block, midi); }
+            return outMeter != nullptr ? outMeter->read().peak[0] : 1.0f;
+        };
+
+        r.expect (driveNoise   (16) > 0.0f,    "noise reaches the output through the missing slot (chain not severed)");
+        r.expect (driveSilence (16) < 1.0e-4f, "output falls back to ~0 on silence (no injected signal)");
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();
