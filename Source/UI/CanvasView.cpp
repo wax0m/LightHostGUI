@@ -151,7 +151,7 @@ void CanvasView::rebuildViews()
                 // Defer so the card isn't destroyed inside its own mouse callback.
                 juce::MessageManager::callAsync ([this, u]
                 {
-                    controller.removeFromChain (u);
+                    controller.removeNode (u);   // heals around the node; branches survive
                     refresh();
                 });
             };

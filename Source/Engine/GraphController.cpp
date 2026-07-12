@@ -291,6 +291,44 @@ String GraphController::addNodeUnconnected (const PluginDescription& desc)
     return uidToNodeId.count (uid) > 0 ? uid : String();
 }
 
+// Remove one node and heal: every upstream edge is bridged to every downstream
+// edge that met it with channel continuity through the node, and NOTHING else is
+// rewritten — a delete on a branched graph keeps all other routing intact. On a
+// linear chain A -> X -> B this heals to A -> B, matching removeFromChain.
+void GraphController::removeNode (const String& uid)
+{
+    captureStates();
+
+    struct InEdge  { String srcUid; int srcCh; int nodeCh; };
+    struct OutEdge { String dstUid; int dstCh; int nodeCh; };
+    std::vector<InEdge>  ins;
+    std::vector<OutEdge> outs;
+
+    ValueTree conns = document.getConnections();
+    for (int i = 0; i < conns.getNumChildren(); ++i)
+    {
+        ValueTree c = conns.getChild (i);
+        if (c.getProperty ("dstUid").toString() == uid)
+            ins.push_back  ({ c.getProperty ("srcUid").toString(),
+                              (int) c.getProperty ("srcCh"), (int) c.getProperty ("dstCh") });
+        else if (c.getProperty ("srcUid").toString() == uid)
+            outs.push_back ({ c.getProperty ("dstUid").toString(),
+                              (int) c.getProperty ("dstCh"), (int) c.getProperty ("srcCh") });
+    }
+
+    document.removeNode (uid);   // also drops the node's own connections
+
+    // canAddConnection dedupes an already-existing parallel edge; healing cannot
+    // create a cycle because the path src -> node -> dst existed before the delete.
+    for (const auto& in : ins)
+        for (const auto& out : outs)
+            if (in.nodeCh == out.nodeCh
+                && document.canAddConnection (in.srcUid, in.srcCh, out.dstUid, out.dstCh))
+                document.addConnection (in.srcUid, in.srcCh, out.dstUid, out.dstCh);
+
+    rebuild();
+}
+
 void GraphController::removeFromChain (const String& uid)
 {
     captureStates();

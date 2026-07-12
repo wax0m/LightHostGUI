@@ -46,7 +46,11 @@ public:
     // Canvas add: create the node WITHOUT rewriting any connections, so adding a
     // plugin never linearizes a branched graph — the user wires it on the canvas.
     String addNodeUnconnected (const PluginDescription&);
-    void removeFromChain (const String& uid);
+    // Remove ONE node and heal around it (bridge each upstream edge to each
+    // downstream edge with channel continuity). Unlike removeFromChain, no other
+    // edge is touched, so branched routing survives a delete.
+    void removeNode (const String& uid);
+    void removeFromChain (const String& uid);   // serial rewrite (legacy tray/tests path)
     void moveUp (const String& uid);
     void moveDown (const String& uid);
     void setBypassed (const String& uid, bool);        // live pass-through, no rebuild

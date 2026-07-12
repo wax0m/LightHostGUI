@@ -319,7 +319,9 @@ void IconMenu::timerCallback()
             options.addItem (INDEX_MOVE_UP + i, "Move Up", linear && i > 0);
             options.addItem (INDEX_MOVE_DOWN + i, "Move Down", linear && i < (int) chain.size() - 1);
             options.addSeparator();
-            options.addItem (INDEX_DELETE + i, "Delete", linear);
+            // Delete heals around the node (removeNode), so unlike the serial
+            // move/add ops it is safe on a branched graph and stays enabled.
+            options.addItem (INDEX_DELETE + i, "Delete", true);
             menu.addSubMenu (item.missing ? item.name + " (missing)" : item.name, options);
         }
         menu.addSeparator();
@@ -434,12 +436,13 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
             return {};
         };
 
-        // Delete plugin
+        // Delete plugin (removeNode heals around it — safe on branched graphs, so
+        // it is not gated on `linear` like the serial move/add ops)
         if (id >= im->INDEX_DELETE && id < im->INDEX_DELETE + 1000000)
         {
-            if (const String uid = chainUidForId (id, im->INDEX_DELETE); uid.isNotEmpty() && linear)
+            if (const String uid = chainUidForId (id, im->INDEX_DELETE); uid.isNotEmpty())
             {
-                im->controller.removeFromChain (uid);
+                im->controller.removeNode (uid);
                 im->controller.save (settings);
             }
         }

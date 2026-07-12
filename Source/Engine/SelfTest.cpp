@@ -1141,6 +1141,91 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test N — removeNode heals around the deleted node WITHOUT rewriting the
+    //          rest of the graph ("M" is reserved by the dry/wet test on the
+    //          feature/dry-wet-mix branch). Build in -> P1 -> P2 -> out plus a
+    //          parallel side edge P1 -> out (branched, non-linear). Deleting P2
+    //          must bridge P1 -> out WITHOUT duplicating the pre-existing side
+    //          edge, leave nothing referencing P2, and keep audio flowing.
+    //          Then deleting P1 from the now-linear chain must heal in -> out.
+    //==========================================================================
+    std::cout << "\n[N] removeNode heals a branched graph" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("removeheal");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        const String p1 = controller.appendToChain (pA);
+        const String p2 = controller.appendToChain (pA);
+        const String out = controller.document.getIoNodeUid (false);
+        const String in  = controller.document.getIoNodeUid (true);
+        r.expect (p1.isNotEmpty() && p2.isNotEmpty(), "two plugin nodes instantiated");
+
+        // Branch: parallel side edge P1 -> out alongside the serial P1 -> P2 -> out.
+        r.expect (controller.connect (p1, 0, out, 0), "side edge P1->out ch0 connects");
+        r.expect (controller.connect (p1, 1, out, 1), "side edge P1->out ch1 connects");
+        r.expect (! controller.isLinearChain(), "graph is branched (non-linear) before the delete");
+
+        controller.removeNode (p2);
+        r.expect (! controller.document.getNodeByUid (p2).isValid(), "deleted node left the document");
+
+        // Healing bridges P1 -> out, which is the SAME edge as the pre-existing
+        // branch — it must survive exactly once per channel (deduped, untouched).
+        int p1OutCh0 = 0, p1OutCh1 = 0, referencesP2 = 0;
+        for (const auto& c : controller.getConnections())
+        {
+            if (c.srcUid == p2 || c.dstUid == p2) ++referencesP2;
+            if (c.srcUid == p1 && c.dstUid == out && c.srcCh == 0 && c.dstCh == 0) ++p1OutCh0;
+            if (c.srcUid == p1 && c.dstUid == out && c.srcCh == 1 && c.dstCh == 1) ++p1OutCh1;
+        }
+        r.expect (referencesP2 == 0, "no connection still references the deleted node");
+        r.expect (p1OutCh0 == 1 && p1OutCh1 == 1, "P1->out survives exactly once per channel (healed, no duplicate)");
+        r.expect (controller.isLinearChain(), "in->P1->out is linear again after the delete");
+
+        AudioBuffer<float> block (2, blockSize);
+        MidiBuffer midi;
+        Random rng (0x11ea1);
+        auto driveNoise = [&] (int count)
+        {
+            float maxPeak = 0.0f;
+            for (int b = 0; b < count; ++b)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    float* d = block.getWritePointer (ch);
+                    for (int i = 0; i < blockSize; ++i)
+                        d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
+                }
+                midi.clear();
+                graph.processBlock (block, midi);
+                if (const MeterTap* m = controller.getOutputMeter())   // re-fetch: rebuilt on delete
+                    maxPeak = jmax (maxPeak, m->read().peak[0]);
+            }
+            return maxPeak;
+        };
+        r.expect (driveNoise (16) > 0.0f, "audio still reaches the output through the healed graph");
+
+        // Linear heal: deleting the remaining plugin bridges in -> out directly.
+        controller.removeNode (p1);
+        r.expect (controller.document.hasConnection (in, 0, out, 0)
+               && controller.document.hasConnection (in, 1, out, 1),
+                  "deleting the last plugin heals in->out on both channels");
+        r.expect (driveNoise (16) > 0.0f, "bare in->out still carries audio after the second delete");
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();
