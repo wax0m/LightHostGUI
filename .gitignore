@@ -1,3 +1,15 @@
 Builds/
 JuceLibraryCode/
 lib/
+build*/
+cmake-build-*/
+.vs/
+.idea/
+.cache/
+CMakeUserPresets.json
+CMakeSettings.json
+/out/
+/CLAUDE.md
+/docs/
+/Resources/design-reference/
+.claude/
