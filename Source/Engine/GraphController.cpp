@@ -104,7 +104,28 @@ void GraphController::rewriteChainConnections (const std::vector<String>& chainU
 }
 
 //==============================================================================
+// closeAllCurrentlyOpenWindows() below pumps the message loop for ~50 ms, so a
+// queued edit (e.g. two rapid canvas removes, deferred via callAsync) can call
+// rebuild() again while this one is mid-teardown. Coalesce: the reentrant call
+// only flags rebuildPending, and we run one more full pass over the (already
+// updated) document once the current pass finishes.
 void GraphController::rebuild()
+{
+    if (rebuilding)
+    {
+        rebuildPending = true;
+        return;
+    }
+
+    const ScopedValueSetter<bool> guard (rebuilding, true);
+    do
+    {
+        rebuildPending = false;
+        rebuildNow();
+    } while (rebuildPending);
+}
+
+void GraphController::rebuildNow()
 {
     PluginWindow::closeAllCurrentlyOpenWindows();
     graph.clear();
@@ -231,13 +252,10 @@ std::vector<GraphController::ChainItem> GraphController::getChain() const
     return result;
 }
 
-String GraphController::appendToChain (const PluginDescription& desc)
+// Place a new node to the right of the current rightmost plugin so it does
+// not stack on top of existing cards (positions are otherwise user-owned).
+float GraphController::placementXForNewNode() const
 {
-    captureStates();
-    std::vector<String> chain = getChainUids();
-
-    // Place the new node to the right of the current rightmost plugin so it does
-    // not stack on top of existing cards (positions are otherwise user-owned).
     float maxX = 0.15f;
     bool  anyPlugin = false;
     ValueTree nodes = document.getNodes();
@@ -250,11 +268,26 @@ String GraphController::appendToChain (const PluginDescription& desc)
             anyPlugin = true;
         }
     }
-    const float newX = anyPlugin ? jmin (0.9f, maxX + 0.12f) : 0.3f;
-    const String uid = document.addPluginNode (desc, newX, 0.5f);
+    return anyPlugin ? jmin (0.9f, maxX + 0.12f) : 0.3f;
+}
+
+String GraphController::appendToChain (const PluginDescription& desc)
+{
+    captureStates();
+    std::vector<String> chain = getChainUids();
+
+    const String uid = document.addPluginNode (desc, placementXForNewNode(), 0.5f);
     chain.insert (chain.end() - 1, uid);   // before audioOut
     rewriteChainConnections (chain);
     rebuild();
+    return uidToNodeId.count (uid) > 0 ? uid : String();
+}
+
+String GraphController::addNodeUnconnected (const PluginDescription& desc)
+{
+    captureStates();
+    const String uid = document.addPluginNode (desc, placementXForNewNode(), 0.5f);
+    rebuild();   // existing connections are untouched — nothing is rewritten serially
     return uidToNodeId.count (uid) > 0 ? uid : String();
 }
 

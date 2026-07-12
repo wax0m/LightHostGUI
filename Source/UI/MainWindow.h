@@ -47,6 +47,15 @@ public:
         setVisible (false);
     }
 
+    // Pause the content's 60 Hz UI timer while hidden to the tray: a backgrounded
+    // host should burn no CPU on meters/param polling for an invisible window.
+    void visibilityChanged() override
+    {
+        juce::DocumentWindow::visibilityChanged();   // TopLevelWindow bookkeeping
+        if (content != nullptr)
+            content->setUiTimerRunning (isVisible());
+    }
+
 private:
     LightHostLookAndFeel lookAndFeel;
     MainComponent* content = nullptr;   // owned by the DocumentWindow content

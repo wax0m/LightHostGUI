@@ -542,6 +542,12 @@ void IconMenu::showMainWindow()
         cb.renamePreset = [this] (int i) { renamePreset (i); };
         cb.savePreset   = [this] { saveActivePreset(); };
         cb.deletePreset = [this] { deleteActivePreset(); };
+        cb.sampleRate   = [this]
+        {
+            auto* d = deviceManager.getCurrentAudioDevice();
+            return d != nullptr ? d->getCurrentSampleRate() : 0.0;
+        };
+        cb.cpuLoad      = [this] { return deviceManager.getCpuUsage(); };
         mainWindow = std::make_unique<lighthost::ui::MainWindow> (controller, store, std::move (cb));
     }
 
@@ -567,7 +573,13 @@ void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
             const int idx = KnownPluginList::getIndexChosenByMenu (types, r);
             if (idx < 0)
                 return;
-            controller.appendToChain (types[idx]);
+            // Serial append rewrites ALL connections as a chain, which would destroy
+            // parallel routing — on a branched graph add the node unconnected instead
+            // (the user wires it on the canvas). Checked here, not at menu-build time.
+            if (controller.isLinearChain())
+                controller.appendToChain (types[idx]);
+            else
+                controller.addNodeUnconnected (types[idx]);
             controller.save (*getAppProperties().getUserSettings());
             if (mainWindow != nullptr)
                 mainWindow->refreshChain();

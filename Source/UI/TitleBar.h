@@ -30,6 +30,11 @@ public:
     std::function<void()>                onSavePreset;
     std::function<void()>                onDeletePreset;
 
+    // Live device stats (supplied by IconMenu via MainComponent). Null / <= 0 means
+    // unknown — the readout shows a placeholder rather than a made-up number.
+    std::function<double()>              getSampleRate;   // Hz
+    std::function<double()>              getCpuLoad;      // 0..1
+
     void refreshPresets();   // recompute tab layout + repaint from the store
 
     static constexpr int barHeight = 50;

@@ -36,6 +36,9 @@ public:
         std::function<void (int)>                        renamePreset;
         std::function<void()>                            savePreset;
         std::function<void()>                            deletePreset;
+        // Live device stats for the title bar readout.
+        std::function<double()>                          sampleRate;   // Hz
+        std::function<double()>                          cpuLoad;      // 0..1
     };
 
     MainComponent (GraphController&, const PresetStore&, Callbacks);
@@ -43,6 +46,10 @@ public:
 
     void refreshChain();     // rebuild cards after an external chain change
     void refreshPresets();   // re-read the preset tabs after an external change
+
+    // The window hides to the tray instead of closing; pause the 60 Hz UI timer
+    // while hidden so a backgrounded host does no metering/param-poll work.
+    void setUiTimerRunning (bool shouldRun);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -57,6 +64,7 @@ private:
     TitleBar       titleBar;
     juce::Viewport viewport;
     CanvasView     canvas;
+    int            statsTickCounter = 0;   // throttles the title-bar stats repaint
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

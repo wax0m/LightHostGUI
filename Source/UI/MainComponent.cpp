@@ -20,6 +20,8 @@ MainComponent::MainComponent (GraphController& controllerToPoll, const PresetSto
     titleBar.onRenamePreset  = [this] (int i) { if (callbacks.renamePreset) callbacks.renamePreset (i); };
     titleBar.onSavePreset    = [this] { if (callbacks.savePreset) callbacks.savePreset(); };
     titleBar.onDeletePreset  = [this] { if (callbacks.deletePreset) callbacks.deletePreset(); };
+    titleBar.getSampleRate   = callbacks.sampleRate;
+    titleBar.getCpuLoad      = callbacks.cpuLoad;
     titleBar.refreshPresets();
 
     canvas.onAddPlugin  = [this] (juce::Point<int> p) { if (callbacks.addPlugin)  callbacks.addPlugin (p); };
@@ -61,9 +63,24 @@ void MainComponent::resized()
     canvas.setVisibleArea (viewport.getMaximumVisibleWidth(), viewport.getMaximumVisibleHeight());
 }
 
+void MainComponent::setUiTimerRunning (bool shouldRun)
+{
+    if (shouldRun && ! isTimerRunning())
+        startTimerHz (60);
+    else if (! shouldRun)
+        stopTimer();
+}
+
 void MainComponent::timerCallback()
 {
     canvas.tick();
+
+    // Title-bar CPU/sample-rate readout: ~2 Hz is plenty for text/a load bar.
+    if (++statsTickCounter >= 30)
+    {
+        statsTickCounter = 0;
+        titleBar.repaint();
+    }
 }
 
 } // namespace lighthost::ui

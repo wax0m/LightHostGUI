@@ -86,18 +86,22 @@ void TitleBar::paint (juce::Graphics& g)
     g.setFont (LightHostLookAndFeel::display (17.0f, false));
     g.drawText ("+", plusRect, juce::Justification::centred);
 
-    // Right cluster: CPU meter + sample rate.
+    // Right cluster: CPU meter + sample rate (live from the audio device).
+    const double sr  = getSampleRate ? getSampleRate() : 0.0;
+    const float  cpu = getCpuLoad ? juce::jlimit (0.0f, 1.0f, (float) getCpuLoad()) : 0.0f;
+
     auto rc = settingsRect.getX() - 12;
     g.setColour (LightHostLookAndFeel::textTert2());
     g.setFont (LightHostLookAndFeel::mono (10.0f));
-    g.drawText ("48.0 kHz", rc - 66, 0, 62, getHeight(), juce::Justification::centredRight);
+    g.drawText (sr > 0.0 ? juce::String (sr / 1000.0, 1) + " kHz" : juce::String ("--"),
+                rc - 66, 0, 62, getHeight(), juce::Justification::centredRight);
 
     const int meterX = rc - 66 - 8 - 46;
     juce::Rectangle<float> cpuTrack ((float) meterX, getHeight() * 0.5f - 2.5f, 46.0f, 5.0f);
     g.setColour (juce::Colour (0xff151311));
     g.fillRoundedRectangle (cpuTrack, 2.0f);
-    g.setColour (juce::Colour (0xff74b84a));
-    g.fillRoundedRectangle (cpuTrack.withWidth (cpuTrack.getWidth() * 0.25f), 2.0f);
+    g.setColour (cpu > 0.85f ? LightHostLookAndFeel::meterRed() : juce::Colour (0xff74b84a));
+    g.fillRoundedRectangle (cpuTrack.withWidth (cpuTrack.getWidth() * cpu), 2.0f);
     g.setColour (LightHostLookAndFeel::textTert2());
     g.setFont (LightHostLookAndFeel::mono (9.0f));
     g.drawText ("CPU", meterX - 30, 0, 26, getHeight(), juce::Justification::centredRight);

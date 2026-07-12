@@ -108,15 +108,20 @@ void NodeCard::refreshParamReadouts()
         return;
     paramPollCounter = 0;
 
-    const auto ps = controller.getNodeCardParameters (uid, (int) paramIndices.size());
+    // Poll only the 1–2 curated indices directly: re-collecting the plugin's full
+    // parameter list (with per-param text formatting) is O(all params) per tick and
+    // stutters with large synths on the card.
     KnobStrip* slots[2] = { &knobA, &knobB };
-    for (size_t i = 0; i < ps.size() && i < 2; ++i)
+    for (size_t i = 0; i < paramIndices.size() && i < 2; ++i)
     {
         auto* k = slots[i];
         if (k->getSlider().isMouseButtonDown())   // don't fight the user mid-drag
             continue;
-        k->setValueQuiet (ps[i].value);
-        k->setReadout (ps[i].text.isNotEmpty() ? ps[i].text : juce::String (ps[i].value, 2));
+        const int idx = paramIndices[i];
+        const float v = controller.getNodeParameter (uid, idx);
+        k->setValueQuiet (v);
+        const juce::String t = controller.getNodeParameterText (uid, idx);
+        k->setReadout (t.isNotEmpty() ? t : juce::String (v, 2));
     }
 }
 

@@ -142,7 +142,7 @@ void CanvasView::rebuildViews()
             item.uid      = uid;
             item.name     = n.getProperty ("name").toString();
             item.bypassed = controller.document.isBypassed (uid);
-            item.missing  = controller.getNodeForUid (uid) == nullptr;
+            item.missing  = controller.isMissing (uid);   // pass-through stand-ins ARE live nodes
 
             auto* card = new NodeCard (controller, item);
             card->onOpenEditor = [this] (const juce::String& u) { if (onOpenEditor) onOpenEditor (u); };
@@ -397,7 +397,8 @@ void CanvasView::mouseDrag (const juce::MouseEvent& e)
     wireEnd = e.position;
     hoverDstUid = inputPortAt (wireEnd);
     hoverValid  = hoverDstUid.isNotEmpty() && hoverDstUid != wireSrcUid
-                  && controller.canConnect (wireSrcUid, 0, hoverDstUid, 0);
+                  && controller.canConnect (wireSrcUid, 0, hoverDstUid, 0)
+                  && controller.canConnect (wireSrcUid, 1, hoverDstUid, 1);
     repaint();
 }
 
@@ -408,8 +409,10 @@ void CanvasView::mouseUp (const juce::MouseEvent&)
 
     if (hoverValid)
     {
-        controller.connect (wireSrcUid, 0, hoverDstUid, 0);   // stereo: both channels
-        controller.connect (wireSrcUid, 1, hoverDstUid, 1);
+        // Stereo pair is atomic: never leave a half-connected (mono) cable behind.
+        const bool ok0 = controller.connect (wireSrcUid, 0, hoverDstUid, 0);
+        if (ok0 && ! controller.connect (wireSrcUid, 1, hoverDstUid, 1))
+            controller.disconnect (wireSrcUid, 0, hoverDstUid, 0);
     }
 
     draggingWire = false;

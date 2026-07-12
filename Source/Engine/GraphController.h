@@ -43,6 +43,9 @@ public:
     // Serial-chain operations (tray menu)
     std::vector<ChainItem> getChain() const;
     String appendToChain (const PluginDescription&);   // returns new node uid, "" on failure
+    // Canvas add: create the node WITHOUT rewriting any connections, so adding a
+    // plugin never linearizes a branched graph — the user wires it on the canvas.
+    String addNodeUnconnected (const PluginDescription&);
     void removeFromChain (const String& uid);
     void moveUp (const String& uid);
     void moveDown (const String& uid);
@@ -51,6 +54,7 @@ public:
 
     //==============================================================================
     AudioProcessorGraph::Node* getNodeForUid (const String& uid) const;
+    bool isMissing (const String& uid) const noexcept { return missingPlugins.count (uid) > 0; }
 
     //==============================================================================
     // Master meter taps for the GUI (message-thread reads). Null until the first
@@ -111,11 +115,13 @@ public:
     GraphDocument document;
 
 private:
-    void rebuild();                          // document -> live graph
+    void rebuild();                          // document -> live graph (reentrancy-safe wrapper)
+    void rebuildNow();                       // the actual teardown/build pass
     void rewireConnections();                // re-wire live graph from doc WITHOUT reloading plugins
     void captureStates();                    // live plugin states -> document
     std::vector<String> getChainUids() const;            // audioIn .. audioOut, doc order
     void rewriteChainConnections (const std::vector<String>& chainUids);
+    float placementXForNewNode() const;      // right of the current rightmost plugin
 
     // Meter plumbing (runtime only).
     void insertMasterMeters();
@@ -139,6 +145,11 @@ private:
     AudioProcessorGraph::Node::Ptr midiInputNode;       // runtime MIDI source (graph-owned)
     bool monoInput = false;                             // sum input to mono, feed both channels
     MonoInputProcessor* monoNode = nullptr;             // runtime mono-collapse node (graph-owned)
+    // closeAllCurrentlyOpenWindows() (called by rebuildNow) pumps the message loop,
+    // so a queued edit can re-enter rebuild mid-teardown. The wrapper coalesces such
+    // calls into one extra pass after the current one finishes.
+    bool rebuilding = false;
+    bool rebuildPending = false;
 
     JUCE_DECLARE_NON_COPYABLE (GraphController)
 };
