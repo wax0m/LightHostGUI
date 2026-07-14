@@ -120,6 +120,31 @@ namespace
         return std::make_unique<PropertiesFile> (f, o);
     }
 
+    // Fill the stereo block with white noise, process `count` blocks through the
+    // graph, and return the highest ch0 peak the meter saw. The meter is re-fetched
+    // per block via `meterProvider` so a caller can keep driving across graph edits
+    // (meters are re-spliced on every rewire). Processing many blocks lets any
+    // plugin latency fill through before the peak is sampled.
+    float driveNoiseBlocks (AudioProcessorGraph& graph, AudioBuffer<float>& block, MidiBuffer& midi,
+                            Random& rng, const std::function<const MeterTap*()>& meterProvider, int count)
+    {
+        float maxPeak = 0.0f;
+        for (int b = 0; b < count; ++b)
+        {
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                float* d = block.getWritePointer (ch);
+                for (int i = 0; i < block.getNumSamples(); ++i)
+                    d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
+            }
+            midi.clear();
+            graph.processBlock (block, midi);
+            if (const MeterTap* m = meterProvider())
+                maxPeak = jmax (maxPeak, m->read().peak[0]);
+        }
+        return maxPeak;
+    }
+
     //==========================================================================
     // Plugin capability report. Runs for each explicitly-passed plugin path to
     // characterise a plugin that misbehaves in the chain (bus layout, latency,
@@ -507,26 +532,9 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         MidiBuffer midi;
         Random rng (0x1965abcd);
 
-        // Fill `block` with white noise, process `count` blocks, and return the
-        // highest ch0 peak the given meter saw. Processing many blocks lets any
-        // plugin latency fill through before we sample the meter.
         auto driveNoise = [&] (const MeterTap* meter, int count)
         {
-            float maxPeak = 0.0f;
-            for (int b = 0; b < count; ++b)
-            {
-                for (int ch = 0; ch < 2; ++ch)
-                {
-                    float* d = block.getWritePointer (ch);
-                    for (int i = 0; i < blockSize; ++i)
-                        d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
-                }
-                midi.clear();
-                graph.processBlock (block, midi);
-                if (meter != nullptr)
-                    maxPeak = jmax (maxPeak, meter->read().peak[0]);
-            }
-            return maxPeak;
+            return driveNoiseBlocks (graph, block, midi, rng, [meter] { return meter; }, count);
         };
 
         // Process `count` silent blocks and return the meter's final ch0 peak.
@@ -558,7 +566,7 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         // silent input). Remove the plugin so the chain is a clean
         // audioIn -> meters -> audioOut pass-through, then prove the output meter
         // rises on noise and collapses to ~0 on silence.
-        controller.removeFromChain (uid);           // rebuild -> fresh meter nodes
+        controller.removeNode (uid);                // rewire -> fresh meter nodes
         const MeterTap* passOut = controller.getOutputMeter();
         r.expect (passOut != nullptr, "output meter present after plugin removal");
 
@@ -892,7 +900,7 @@ int runSelfTest (const StringArray& explicitPluginPaths)
             if (uid.isEmpty())
                 continue;
             if (controller.nodeAcceptsMidi (uid)) { midiUid = uid; break; }
-            controller.removeFromChain (uid);
+            controller.removeNode (uid);
         }
 
         if (midiUid.isNotEmpty())
@@ -1047,10 +1055,10 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         controller.setNodePosition (uid1, 0.1f, 0.2f);
         controller.setNodePosition (uid2, 0.8f, 0.9f);
 
-        // A structural edit that rebuilds the graph: add a third node then remove it.
+        // A structural edit: add a third node then remove it.
         const String uid3 = controller.appendToChain (pA);
         r.expect (uid3.isNotEmpty(), "third plugin instantiated");
-        controller.removeFromChain (uid3);
+        controller.removeNode (uid3);
 
         const auto eq = [] (float a, float b) { return std::abs (a - b) < 1.0e-6f; };
         r.expect (eq (controller.getNodeX (uid1), 0.1f) && eq (controller.getNodeY (uid1), 0.2f),
@@ -1109,21 +1117,7 @@ int runSelfTest (const StringArray& explicitPluginPaths)
 
         auto driveNoise = [&] (int count)
         {
-            float maxPeak = 0.0f;
-            for (int b = 0; b < count; ++b)
-            {
-                for (int ch = 0; ch < 2; ++ch)
-                {
-                    float* d = block.getWritePointer (ch);
-                    for (int i = 0; i < blockSize; ++i)
-                        d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
-                }
-                midi.clear();
-                graph.processBlock (block, midi);
-                if (outMeter != nullptr)
-                    maxPeak = jmax (maxPeak, outMeter->read().peak[0]);
-            }
-            return maxPeak;
+            return driveNoiseBlocks (graph, block, midi, rng, [outMeter] { return outMeter; }, count);
         };
 
         auto driveSilence = [&] (int count)
@@ -1175,8 +1169,15 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         r.expect (controller.connect (p1, 1, out, 1), "side edge P1->out ch1 connects");
         r.expect (! controller.isLinearChain(), "graph is branched (non-linear) before the delete");
 
+        // The delete must be incremental: the OTHER plugin's live instance (and by
+        // extension its editor) survives the edit — no reload, no teardown.
+        const AudioProcessor* p1InstanceBefore = controller.getNodeForUid (p1)->getProcessor();
+
         controller.removeNode (p2);
         r.expect (! controller.document.getNodeByUid (p2).isValid(), "deleted node left the document");
+        r.expect (controller.getNodeForUid (p1) != nullptr
+               && controller.getNodeForUid (p1)->getProcessor() == p1InstanceBefore,
+                  "the surviving plugin kept its live instance (incremental delete, no reload)");
 
         // Healing bridges P1 -> out, which is the SAME edge as the pre-existing
         // branch — it must survive exactly once per channel (deduped, untouched).
@@ -1194,32 +1195,123 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         AudioBuffer<float> block (2, blockSize);
         MidiBuffer midi;
         Random rng (0x11ea1);
+        // Meter re-fetched per block: it is re-spliced on every delete/rewire.
         auto driveNoise = [&] (int count)
         {
-            float maxPeak = 0.0f;
-            for (int b = 0; b < count; ++b)
-            {
-                for (int ch = 0; ch < 2; ++ch)
-                {
-                    float* d = block.getWritePointer (ch);
-                    for (int i = 0; i < blockSize; ++i)
-                        d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
-                }
-                midi.clear();
-                graph.processBlock (block, midi);
-                if (const MeterTap* m = controller.getOutputMeter())   // re-fetch: rebuilt on delete
-                    maxPeak = jmax (maxPeak, m->read().peak[0]);
-            }
-            return maxPeak;
+            return driveNoiseBlocks (graph, block, midi, rng,
+                                     [&controller]() -> const MeterTap* { return controller.getOutputMeter(); },
+                                     count);
         };
         r.expect (driveNoise (16) > 0.0f, "audio still reaches the output through the healed graph");
 
-        // Linear heal: deleting the remaining plugin bridges in -> out directly.
+        // Branched add: re-branch the graph (side edge in -> out alongside
+        // in -> P1 -> out), then add via the shared addPlugin entry point. It must
+        // come in UNCONNECTED — every pre-existing edge stays untouched — and still
+        // show up in the tray listing (getChain must never omit a live plugin).
+        r.expect (controller.connect (in, 0, out, 0) && controller.connect (in, 1, out, 1),
+                  "side edge in->out re-branches the graph");
+        const auto edgesBefore = controller.getConnections().size();
+        const String p3 = controller.addPlugin (pA);
+        r.expect (p3.isNotEmpty(), "addPlugin on a branched graph instantiates the node");
+        r.expect (controller.getConnections().size() == edgesBefore,
+                  "branched add is unconnected: no existing edge was touched");
+        {
+            bool p1Listed = false, p3Listed = false;
+            for (const auto& item : controller.getChain())
+            {
+                if (item.uid == p1) p1Listed = true;
+                if (item.uid == p3) p3Listed = true;
+            }
+            r.expect (p1Listed && p3Listed, "tray chain listing includes branch and unconnected nodes");
+        }
+        controller.removeNode (p3);
+
+        // Linear heal: drop the side edge, then deleting the remaining plugin
+        // bridges in -> out directly.
+        controller.disconnectPair (in, out);
         controller.removeNode (p1);
         r.expect (controller.document.hasConnection (in, 0, out, 0)
                && controller.document.hasConnection (in, 1, out, 1),
                   "deleting the last plugin heals in->out on both channels");
         r.expect (driveNoise (16) > 0.0f, "bare in->out still carries audio after the second delete");
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
+    // Test O — stereo-pair connect primitives (a canvas cable is ch0+ch1 as one
+    //          operation: atomic add, duplicate rejection, HALF-pair completion)
+    //          and non-stacking placement (consecutive adds never land two cards
+    //          on the same spot, even once x saturates at the right edge).
+    //==========================================================================
+    std::cout << "\n[O] stereo-pair primitives + non-stacking placement" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("pairplacement");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        const String in  = controller.document.getIoNodeUid (true);
+        const String p1  = controller.appendToChain (pA);
+        const String p2  = controller.addNodeUnconnected (pA);
+        r.expect (p1.isNotEmpty() && p2.isNotEmpty(), "pair-test plugins instantiated");
+
+        // Fresh pair connects atomically (both channels, one call).
+        r.expect (controller.canConnectPair (p1, p2), "fresh pair is connectable");
+        r.expect (controller.connectPair (p1, p2),    "fresh pair connects");
+        r.expect (controller.document.hasConnection (p1, 0, p2, 0)
+               && controller.document.hasConnection (p1, 1, p2, 1), "both channels present after connectPair");
+
+        // A full existing pair is a pure duplicate — rejected.
+        r.expect (! controller.canConnectPair (p1, p2), "existing full pair is not re-connectable");
+        r.expect (! controller.connectPair (p1, p2),    "connectPair rejects a full duplicate");
+
+        // A HALF pair (mono edge, e.g. from a hand-edited document) is repairable:
+        // the drag completes the missing channel instead of being stuck rejected.
+        controller.disconnect (p1, 1, p2, 1);
+        r.expect (controller.canConnectPair (p1, p2), "half pair is connectable (completion)");
+        r.expect (controller.connectPair (p1, p2),    "half pair completes");
+        r.expect (controller.document.hasConnection (p1, 1, p2, 1), "missing channel was added back");
+
+        // Invalid targets stay invalid pairwise (edge into audioIn).
+        r.expect (! controller.canConnectPair (p1, in), "pair into audioIn rejected");
+
+        // disconnectPair drops both channels in one call.
+        controller.disconnectPair (p1, p2);
+        r.expect (! controller.document.hasConnection (p1, 0, p2, 0)
+               && ! controller.document.hasConnection (p1, 1, p2, 1), "disconnectPair removes both channels");
+
+        // Placement: six more adds march right, saturate at x=0.9, then cascade
+        // down — every plugin node must end up on its own spot.
+        for (int i = 0; i < 6; ++i)
+            controller.addNodeUnconnected (pA);
+
+        std::vector<std::pair<float, float>> pos;
+        ValueTree nodes = controller.document.getNodes();
+        for (int i = 0; i < nodes.getNumChildren(); ++i)
+        {
+            const auto n = nodes.getChild (i);
+            if (n.getProperty ("type").toString() == GraphDocument::typePlugin)
+                pos.push_back ({ (float) n.getProperty ("x", 0.15f), (float) n.getProperty ("y", 0.5f) });
+        }
+        r.expect ((int) pos.size() == 8, "eight plugin nodes placed");
+
+        bool anyStacked = false;
+        for (size_t a = 0; a < pos.size() && ! anyStacked; ++a)
+            for (size_t b = a + 1; b < pos.size() && ! anyStacked; ++b)
+                if (std::abs (pos[a].first - pos[b].first) < 0.045f
+                 && std::abs (pos[a].second - pos[b].second) < 0.045f)
+                    anyStacked = true;
+        r.expect (! anyStacked, "no two placed nodes share a spot (anti-stacking cascade)");
 
         controller.save (*settings);
         f.deleteFile();

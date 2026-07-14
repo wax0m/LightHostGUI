@@ -43,6 +43,12 @@ void PluginWindow::closeAllCurrentlyOpenWindows()
         Component dummyModalComp;
         dummyModalComp.enterModalState();
         MessageManager::getInstance()->runDispatchLoopUntil (50);
+
+        // The pump above can dispatch queued callbacks (e.g. a pending tray "Edit")
+        // that open a NEW editor window for a node the caller is about to destroy —
+        // sweep again (no second pump) so no window survives into the teardown.
+        for (int i = activePluginWindows.size(); --i >= 0;)
+            delete activePluginWindows.getUnchecked (i);
     }
 }
 

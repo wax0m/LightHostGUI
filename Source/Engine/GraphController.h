@@ -42,15 +42,16 @@ public:
     //==============================================================================
     // Serial-chain operations (tray menu)
     std::vector<ChainItem> getChain() const;
-    String appendToChain (const PluginDescription&);   // returns new node uid, "" on failure
-    // Canvas add: create the node WITHOUT rewriting any connections, so adding a
-    // plugin never linearizes a branched graph — the user wires it on the canvas.
-    String addNodeUnconnected (const PluginDescription&);
+    // The one add entry point for UI code: appends serially while the graph is a
+    // linear chain, otherwise adds the node unconnected (the user wires it on the
+    // canvas). Keeps the linearize-on-add decision out of the call sites.
+    String addPlugin (const PluginDescription&);       // returns new node uid, "" on failure
+    String appendToChain (const PluginDescription&);   // serial add (linear chains)
+    String addNodeUnconnected (const PluginDescription&);   // no connections touched
     // Remove ONE node and heal around it (bridge each upstream edge to each
-    // downstream edge with channel continuity). Unlike removeFromChain, no other
-    // edge is touched, so branched routing survives a delete.
+    // downstream edge with channel continuity). No other edge is touched and no
+    // plugin is reloaded, so branched routing and live instances survive a delete.
     void removeNode (const String& uid);
-    void removeFromChain (const String& uid);   // serial rewrite (legacy tray/tests path)
     void moveUp (const String& uid);
     void moveDown (const String& uid);
     void setBypassed (const String& uid, bool);        // live pass-through, no rebuild
@@ -85,6 +86,15 @@ public:
     void disconnect (const String& srcUid, int srcCh, const String& dstUid, int dstCh);
     bool canConnect (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const;
     std::vector<Connection> getConnections() const;
+
+    // A canvas cable is a stereo pair (ch0+ch1, straight). The pair calls treat the
+    // full pair as the goal state: connectPair adds whichever channels are missing
+    // (so it can complete a half pair from a legacy/hand-edited document) with ONE
+    // live rewire; canConnectPair is false only if a channel is neither present nor
+    // addable, or the pair already exists in full.
+    bool canConnectPair (const String& srcUid, const String& dstUid) const;
+    bool connectPair    (const String& srcUid, const String& dstUid);
+    void disconnectPair (const String& srcUid, const String& dstUid);
 
     // Presets: apply a stored graph document (deep copy + rebuild), or snapshot
     // the live one (capturing plugin states) for saving into a preset.
@@ -125,7 +135,11 @@ private:
     void captureStates();                    // live plugin states -> document
     std::vector<String> getChainUids() const;            // audioIn .. audioOut, doc order
     void rewriteChainConnections (const std::vector<String>& chainUids);
-    float placementXForNewNode() const;      // right of the current rightmost plugin
+    juce::Point<float> placementForNewNode() const;   // right of the rightmost plugin, never stacked
+    // Instantiate ONE plugin document node into the live graph (PassThrough stand-in
+    // + missingPlugins entry when the plugin can't load) and register it in
+    // uidToNodeId. Shared by rebuildNow and the incremental add paths.
+    AudioProcessorGraph::Node* addPluginNodeToGraph (const ValueTree& nodeTree);
 
     // Meter plumbing (runtime only).
     void insertMasterMeters();
@@ -149,9 +163,7 @@ private:
     AudioProcessorGraph::Node::Ptr midiInputNode;       // runtime MIDI source (graph-owned)
     bool monoInput = false;                             // sum input to mono, feed both channels
     MonoInputProcessor* monoNode = nullptr;             // runtime mono-collapse node (graph-owned)
-    // closeAllCurrentlyOpenWindows() (called by rebuildNow) pumps the message loop,
-    // so a queued edit can re-enter rebuild mid-teardown. The wrapper coalesces such
-    // calls into one extra pass after the current one finishes.
+    // Reentrant-rebuild coalescing — see the comment on rebuild() in the .cpp.
     bool rebuilding = false;
     bool rebuildPending = false;
 
