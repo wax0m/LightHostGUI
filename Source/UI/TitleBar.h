@@ -37,6 +37,10 @@ public:
 
     void refreshPresets();   // recompute tab layout + repaint from the store
 
+    // Repaint only the CPU/sample-rate cluster (for the periodic stats tick) —
+    // the tabs/logo/gradient don't change, so don't rasterise the whole bar.
+    void repaintStats();
+
     static constexpr int barHeight = 50;
 
     void paint (juce::Graphics&) override;

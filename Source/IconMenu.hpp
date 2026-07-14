@@ -55,6 +55,11 @@ private:
     KnownPluginList::SortMethod pluginSortMethod;
     PopupMenu menu;
     bool menuIconLeftClicked;
+    // Chain uids snapshotted when the tray menu is BUILT. Item ids encode an index
+    // into this snapshot; resolving against a fresh getChain() at invocation time
+    // could map the index onto a different plugin if the graph changed while the
+    // menu was open (and delete the wrong node). Uids are re-validated on use.
+    std::vector<String> menuChainUids;
     AudioProcessorGraph graph;
     AudioProcessorPlayer player;
     GraphController controller { graph, formatManager };

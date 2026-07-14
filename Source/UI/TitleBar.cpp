@@ -100,7 +100,7 @@ void TitleBar::paint (juce::Graphics& g)
     juce::Rectangle<float> cpuTrack ((float) meterX, getHeight() * 0.5f - 2.5f, 46.0f, 5.0f);
     g.setColour (juce::Colour (0xff151311));
     g.fillRoundedRectangle (cpuTrack, 2.0f);
-    g.setColour (cpu > 0.85f ? LightHostLookAndFeel::meterRed() : juce::Colour (0xff74b84a));
+    g.setColour (cpu > 0.85f ? LightHostLookAndFeel::meterRed() : LightHostLookAndFeel::meterGreen());
     g.fillRoundedRectangle (cpuTrack.withWidth (cpuTrack.getWidth() * cpu), 2.0f);
     g.setColour (LightHostLookAndFeel::textTert2());
     g.setFont (LightHostLookAndFeel::mono (9.0f));
@@ -116,6 +116,16 @@ void TitleBar::paint (juce::Graphics& g)
     const auto c = settingsRect.getCentre();
     for (int i = -1; i <= 1; ++i)
         g.fillEllipse ((float) c.x + i * 7.0f - 1.75f, (float) c.y - 1.75f, 3.5f, 3.5f);
+}
+
+// Same geometry as paint()'s right cluster: from the "CPU" label's left edge to
+// the right edge of the kHz text. Keeps the periodic stats tick from re-rasterising
+// the gradient/logo/preset tabs.
+void TitleBar::repaintStats()
+{
+    const int rc   = settingsRect.getX() - 12;
+    const int left = rc - 66 - 8 - 46 - 30;
+    repaint (left, 0, (rc - 4) - left, getHeight());
 }
 
 void TitleBar::mouseMove (const juce::MouseEvent& e)

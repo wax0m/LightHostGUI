@@ -47,16 +47,28 @@ public:
         setVisible (false);
     }
 
-    // Pause the content's 60 Hz UI timer while hidden to the tray: a backgrounded
-    // host should burn no CPU on meters/param polling for an invisible window.
+    // Pause the content's 60 Hz UI timer while the window can't be seen — hidden
+    // to the tray OR natively minimised (which does NOT change isVisible()): a
+    // backgrounded host should burn no CPU on meters/param polling.
     void visibilityChanged() override
     {
         juce::DocumentWindow::visibilityChanged();   // TopLevelWindow bookkeeping
-        if (content != nullptr)
-            content->setUiTimerRunning (isVisible());
+        updateUiTimer();
+    }
+
+    void minimisationStateChanged (bool isNowMinimised) override
+    {
+        juce::DocumentWindow::minimisationStateChanged (isNowMinimised);
+        updateUiTimer();
     }
 
 private:
+    void updateUiTimer()
+    {
+        if (content != nullptr)
+            content->setUiTimerRunning (isVisible() && ! isMinimised());
+    }
+
     LightHostLookAndFeel lookAndFeel;
     MainComponent* content = nullptr;   // owned by the DocumentWindow content
 

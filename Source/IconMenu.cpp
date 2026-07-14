@@ -307,8 +307,13 @@ void IconMenu::timerCallback()
         const bool linear = controller.isLinearChain();
         if (! linear)
             menu.addItem (4, "Chain edits disabled: graph has parallel routing - edit on the canvas.", false);
-        // Active plugins
+        // Active plugins. Snapshot the uid per menu index NOW — the invocation
+        // callback resolves ids against this snapshot, not a fresh chain, so a
+        // graph edit made while the menu is open can never shift the mapping.
         const auto chain = controller.getChain();
+        menuChainUids.clear();
+        for (const auto& item : chain)
+            menuChainUids.push_back (item.uid);
         for (int i = 0; i < (int) chain.size(); i++)
         {
             const auto& item = chain[(size_t) i];
@@ -385,6 +390,11 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
         {
             im->controller.clearAllPluginStates();
             im->controller.save (settings);
+            // The rebuild may have replaced instances (or turned an uninstalled
+            // plugin into a pass-through stand-in) — rebuild the cards so they
+            // never keep polling params of a stale instance.
+            if (im->mainWindow != nullptr)
+                im->mainWindow->refreshChain();
             return;
         }
         if (id == 3)
@@ -424,16 +434,19 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     // Plugins
     if (id > 2)
     {
-        // Re-checked at invocation time: the menu may have been built before a
-        // canvas edit branched the graph, and the serial ops must never run then.
+        // Serial ops are re-checked at invocation time: the menu may have been
+        // built before a canvas edit branched the graph.
         const bool linear = im->controller.isLinearChain();
-        const auto chain = im->controller.getChain();
-        const auto chainUidForId = [&chain] (int itemId, int base) -> String
+        // Resolve ids against the uid snapshot taken when the menu was BUILT (the
+        // labels the user is looking at), then re-validate the uid still exists —
+        // a stale click must be a no-op, never act on a different plugin.
+        const auto chainUidForId = [im] (int itemId, int base) -> String
         {
             const int index = itemId - base;
-            if (index >= 0 && index < (int) chain.size())
-                return chain[(size_t) index].uid;
-            return {};
+            if (index < 0 || index >= (int) im->menuChainUids.size())
+                return {};
+            const String uid = im->menuChainUids[(size_t) index];
+            return im->controller.document.getNodeByUid (uid).isValid() ? uid : String();
         };
 
         // Delete plugin (removeNode heals around it — safe on branched graphs, so
@@ -446,25 +459,21 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
                 im->controller.save (settings);
             }
         }
-        // Add plugin
+        // Add plugin (appends while linear, adds unconnected on a branched graph)
         else if (KnownPluginList::getIndexChosenByMenu (im->knownPluginList.getTypes(), id) > -1)
         {
-            if (linear)
-            {
-                const auto knownTypes = im->knownPluginList.getTypes();
-                const PluginDescription plugin = knownTypes[KnownPluginList::getIndexChosenByMenu (knownTypes, id)];
-                im->controller.appendToChain (plugin);
-                im->controller.save (settings);
-            }
+            const auto knownTypes = im->knownPluginList.getTypes();
+            const PluginDescription plugin = knownTypes[KnownPluginList::getIndexChosenByMenu (knownTypes, id)];
+            im->controller.addPlugin (plugin);
+            im->controller.save (settings);
         }
-        // Bypass plugin (live pass-through, no rebuild)
+        // Bypass plugin (live pass-through, no rebuild). Toggles the CURRENT doc
+        // state, not the state snapshotted at menu-build time.
         else if (id >= im->INDEX_BYPASS && id < im->INDEX_BYPASS + 1000000)
         {
-            const int index = id - im->INDEX_BYPASS;
-            if (index >= 0 && index < (int) chain.size())
+            if (const String uid = chainUidForId (id, im->INDEX_BYPASS); uid.isNotEmpty())
             {
-                const auto& item = chain[(size_t) index];
-                im->controller.setBypassed (item.uid, ! item.bypassed);
+                im->controller.setBypassed (uid, ! im->controller.document.isBypassed (uid));
                 im->controller.save (settings);
             }
         }
@@ -576,13 +585,10 @@ void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
             const int idx = KnownPluginList::getIndexChosenByMenu (types, r);
             if (idx < 0)
                 return;
-            // Serial append rewrites ALL connections as a chain, which would destroy
-            // parallel routing — on a branched graph add the node unconnected instead
-            // (the user wires it on the canvas). Checked here, not at menu-build time.
-            if (controller.isLinearChain())
-                controller.appendToChain (types[idx]);
-            else
-                controller.addNodeUnconnected (types[idx]);
+            // addPlugin appends serially on a linear chain and adds unconnected on a
+            // branched graph (never linearizes parallel routing) — decided in the
+            // controller so every add entry point shares the policy.
+            controller.addPlugin (types[idx]);
             controller.save (*getAppProperties().getUserSettings());
             if (mainWindow != nullptr)
                 mainWindow->refreshChain();

@@ -142,17 +142,25 @@ void CanvasView::rebuildViews()
             item.uid      = uid;
             item.name     = n.getProperty ("name").toString();
             item.bypassed = controller.document.isBypassed (uid);
-            item.missing  = controller.isMissing (uid);   // pass-through stand-ins ARE live nodes
+            // Pass-through stand-ins ARE live nodes (isMissing); the getNodeForUid
+            // check additionally badges nodes that never made it into the live
+            // graph at all (e.g. an unknown type from a newer/corrupt document).
+            item.missing  = controller.isMissing (uid)
+                         || controller.getNodeForUid (uid) == nullptr;
 
             auto* card = new NodeCard (controller, item);
             card->onOpenEditor = [this] (const juce::String& u) { if (onOpenEditor) onOpenEditor (u); };
             card->onRemove = [this] (const juce::String& u)
             {
                 // Defer so the card isn't destroyed inside its own mouse callback.
-                juce::MessageManager::callAsync ([this, u]
+                // SafePointer: delivery can outlive this CanvasView (shutdown /
+                // nested message loops), and the callback must then be a no-op.
+                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<CanvasView> (this), u]
                 {
-                    controller.removeNode (u);   // heals around the node; branches survive
-                    refresh();
+                    if (safe == nullptr)
+                        return;
+                    safe->controller.removeNode (u);   // heals around the node; branches survive
+                    safe->refresh();
                 });
             };
             card->onDragMove = [this] (const juce::String& u, juce::Point<int> d) { moveNodeBy (u, d); };
@@ -374,15 +382,14 @@ void CanvasView::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
-    // Otherwise: click a cable to delete it (both channels).
+    // Otherwise: click a cable to delete it (both channels, one live rewire).
     for (const auto& cable : buildCables())
     {
         const auto path = cablePath (cable.a, cable.b);
         juce::Point<float> nearest;
         if (path.getNearestPoint (p, nearest); nearest.getDistanceFrom (p) <= kCableHit)
         {
-            controller.disconnect (cable.src, 0, cable.dst, 0);
-            controller.disconnect (cable.src, 1, cable.dst, 1);
+            controller.disconnectPair (cable.src, cable.dst);
             repaint();
             return;
         }
@@ -395,10 +402,15 @@ void CanvasView::mouseDrag (const juce::MouseEvent& e)
         return;
 
     wireEnd = e.position;
-    hoverDstUid = inputPortAt (wireEnd);
-    hoverValid  = hoverDstUid.isNotEmpty() && hoverDstUid != wireSrcUid
-                  && controller.canConnect (wireSrcUid, 0, hoverDstUid, 0)
-                  && controller.canConnect (wireSrcUid, 1, hoverDstUid, 1);
+    // Validity only depends on the hovered target, not the cursor position —
+    // re-run the (cycle-DFS) validation only when the target actually changes,
+    // not on every mouse-move event.
+    if (const juce::String dst = inputPortAt (wireEnd); dst != hoverDstUid)
+    {
+        hoverDstUid = dst;
+        hoverValid  = dst.isNotEmpty() && dst != wireSrcUid
+                      && controller.canConnectPair (wireSrcUid, dst);
+    }
     repaint();
 }
 
@@ -408,12 +420,7 @@ void CanvasView::mouseUp (const juce::MouseEvent&)
         return;
 
     if (hoverValid)
-    {
-        // Stereo pair is atomic: never leave a half-connected (mono) cable behind.
-        const bool ok0 = controller.connect (wireSrcUid, 0, hoverDstUid, 0);
-        if (ok0 && ! controller.connect (wireSrcUid, 1, hoverDstUid, 1))
-            controller.disconnect (wireSrcUid, 0, hoverDstUid, 0);
-    }
+        controller.connectPair (wireSrcUid, hoverDstUid);   // atomic stereo pair, one rewire
 
     draggingWire = false;
     wireSrcUid   = {};

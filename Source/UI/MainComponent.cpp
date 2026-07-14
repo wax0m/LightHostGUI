@@ -79,7 +79,7 @@ void MainComponent::timerCallback()
     if (++statsTickCounter >= 30)
     {
         statsTickCounter = 0;
-        titleBar.repaint();
+        titleBar.repaintStats();   // stats cluster only — tabs/logo don't change
     }
 }
 

@@ -67,6 +67,10 @@ private:
     KnobStrip knobB { "Pan", -1.0, 1.0, 0.0 };
     std::vector<int> paramIndices;   // knob slot -> plugin param index
     int paramPollCounter = 0;
+    // Last value/text pushed into each knob slot by the poll — setters repaint, so
+    // an unchanged parameter must not re-set (and re-repaint) the knob at 10 Hz.
+    float        lastPolledValue[2] = { -1.0f, -1.0f };
+    juce::String lastPolledText[2];
     SegmentedMeter meterL, meterR;
 
     // Per-node MIDI enable (M7). Shown only for plugins that acceptsMidi(); a

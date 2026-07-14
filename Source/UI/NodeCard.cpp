@@ -108,6 +108,12 @@ void NodeCard::refreshParamReadouts()
         return;
     paramPollCounter = 0;
 
+    // If the plugin has become a pass-through stand-in (or lost its live node)
+    // since this card was built, its curated indices no longer exist — freeze the
+    // knobs rather than polling fabricated zeros into them.
+    if (controller.isMissing (uid) || controller.getNodeForUid (uid) == nullptr)
+        return;
+
     // Poll only the 1–2 curated indices directly: re-collecting the plugin's full
     // parameter list (with per-param text formatting) is O(all params) per tick and
     // stutters with large synths on the card.
@@ -119,9 +125,17 @@ void NodeCard::refreshParamReadouts()
             continue;
         const int idx = paramIndices[i];
         const float v = controller.getNodeParameter (uid, idx);
-        k->setValueQuiet (v);
         const juce::String t = controller.getNodeParameterText (uid, idx);
-        k->setReadout (t.isNotEmpty() ? t : juce::String (v, 2));
+        const juce::String readout = t.isNotEmpty() ? t : juce::String (v, 2);
+
+        // Skip the setters (each repaints the knob) when nothing changed — an idle
+        // plugin shouldn't repaint every card's knobs at 10 Hz.
+        if (v == lastPolledValue[i] && readout == lastPolledText[i])
+            continue;
+        lastPolledValue[i] = v;
+        lastPolledText[i]  = readout;
+        k->setValueQuiet (v);
+        k->setReadout (readout);
     }
 }
 
