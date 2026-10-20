@@ -155,7 +155,8 @@ void CanvasView::rebuildViews()
                 // Defer so the card isn't destroyed inside its own mouse callback.
                 // SafePointer: delivery can outlive this CanvasView (shutdown /
                 // nested message loops), and the callback must then be a no-op.
-                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<CanvasView> (this), u]
+                auto* self = this;   // MSVC rejects `this` inside the nested init-capture
+                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<CanvasView> (self), u]
                 {
                     if (safe == nullptr)
                         return;
