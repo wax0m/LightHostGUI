@@ -239,26 +239,43 @@ void GraphController::rebuildNow()
 // captureStates skips missing nodes.
 AudioProcessorGraph::Node* GraphController::addPluginNodeToGraph (const ValueTree& nodeTree)
 {
+    return registerPluginNode (nodeTree, createPluginInstanceFor (nodeTree));
+}
+
+// Create the hosted plugin for a document node (stereo-forced, saved state
+// restored), or nullptr when it can't be loaded. Touches nothing but the new
+// instance, so the retry path can call it before deciding to change the graph.
+std::unique_ptr<AudioProcessor> GraphController::createPluginInstanceFor (const ValueTree& nodeTree)
+{
+    const auto desc = GraphDocument::getPluginDescription (nodeTree);
+    if (! desc.has_value())
+        return nullptr;
+
+    String errorMessage;
+    auto created = formatManager.createPluginInstance (*desc, graph.getSampleRate(),
+                                                       graph.getBlockSize(), errorMessage);
+    if (created == nullptr)
+        return nullptr;
+
+    // Promote mono-defaulting plugins (e.g. MAutoPitch) to stereo before
+    // restoring state, so they don't collapse a channel in the stereo chain.
+    lighthost::buses::forceStereo (*created, graph.getSampleRate(), graph.getBlockSize());
+
+    const String stateB64 = nodeTree.getProperty ("state").toString();
+    MemoryBlock stateBinary;
+    if (stateBinary.fromBase64Encoding (stateB64) && stateBinary.getSize() > 0)
+        created->setStateInformation (stateBinary.getData(), (int) stateBinary.getSize());
+
+    return std::unique_ptr<AudioProcessor> (std::move (created));
+}
+
+// Register an instance as the live node for a document node; a null instance
+// becomes a PassThrough stand-in recorded in missingPlugins. Not published here:
+// every caller follows with publishTopology() (rebuildNow) or rewireConnections().
+AudioProcessorGraph::Node* GraphController::registerPluginNode (const ValueTree& nodeTree,
+                                                                std::unique_ptr<AudioProcessor> instance)
+{
     const String uid = nodeTree.getProperty ("uid").toString();
-
-    std::unique_ptr<AudioProcessor> instance;
-    if (auto desc = GraphDocument::getPluginDescription (nodeTree))
-    {
-        String errorMessage;
-        if (auto created = formatManager.createPluginInstance (*desc, graph.getSampleRate(),
-                                                               graph.getBlockSize(), errorMessage))
-        {
-            // Promote mono-defaulting plugins (e.g. MAutoPitch) to stereo before
-            // restoring state, so they don't collapse a channel in the stereo chain.
-            lighthost::buses::forceStereo (*created, graph.getSampleRate(), graph.getBlockSize());
-
-            const String stateB64 = nodeTree.getProperty ("state").toString();
-            MemoryBlock stateBinary;
-            if (stateBinary.fromBase64Encoding (stateB64) && stateBinary.getSize() > 0)
-                created->setStateInformation (stateBinary.getData(), (int) stateBinary.getSize());
-            instance = std::move (created);
-        }
-    }
 
     if (instance == nullptr)
     {
@@ -266,7 +283,6 @@ AudioProcessorGraph::Node* GraphController::addPluginNodeToGraph (const ValueTre
         missingPlugins.insert (uid);
     }
 
-    // Not published here: every caller follows with publishTopology() (rebuildNow) or rewireConnections().
     if (auto node = addNodeBatched (std::move (instance)))
     {
         node->setBypassed ((bool) nodeTree.getProperty ("bypassed", false));
@@ -274,6 +290,70 @@ AudioProcessorGraph::Node* GraphController::addPluginNodeToGraph (const ValueTre
         return node.get();
     }
     return nullptr;
+}
+
+// Teardown mirror of registerPluginNode. EVERY per-uid runtime map must be cleaned
+// here (dry/wet's nodeMixes too, when it lands). Not published: the caller follows
+// with rewireConnections(), which also drops and re-splices the runtime strip node.
+void GraphController::removePluginNodeFromGraph (const String& uid)
+{
+    const auto it = uidToNodeId.find (uid);
+    if (it != uidToNodeId.end())
+    {
+        PluginWindow::closeCurrentlyOpenWindowsFor (it->second);   // synchronous, no pump
+        removeNodeBatched (it->second);
+        uidToNodeId.erase (it);
+    }
+    missingPlugins.erase (uid);
+    nodeStrips.erase (uid);
+}
+
+// Missing-plugin recovery (round-3 finding 6). Instantiate FIRST: if the plugin
+// still can't load (or shows a modal dialog while loading), the live graph has not
+// been touched and there is nothing to publish. On success the PassThrough stand-in
+// is replaced under the same uid; the caller's rewireConnections() re-derives its
+// edges and strip from the document. Other plugin instances are never touched.
+bool GraphController::swapInRecoveredPlugin (const String& uid)
+{
+    if (! isMissing (uid))
+        return false;
+
+    const ValueTree nodeTree = document.getNodeByUid (uid);
+    if (! nodeTree.isValid())
+        return false;
+
+    auto instance = createPluginInstanceFor (nodeTree);
+    if (instance == nullptr)
+        return false;
+
+    removePluginNodeFromGraph (uid);
+    const bool registered = registerPluginNode (nodeTree, std::move (instance)) != nullptr;
+    jassert (registered);
+    return registered;
+}
+
+bool GraphController::retryMissingPlugin (const String& uid)
+{
+    if (! swapInRecoveredPlugin (uid))
+        return false;
+
+    rewireConnections();   // the one publish for this gesture
+    return true;
+}
+
+int GraphController::retryMissingPlugins()
+{
+    // Copy first: a successful swap erases its uid from missingPlugins.
+    const std::vector<String> candidates (missingPlugins.begin(), missingPlugins.end());
+
+    int recovered = 0;
+    for (const auto& uid : candidates)
+        if (swapInRecoveredPlugin (uid))
+            ++recovered;
+
+    if (recovered > 0)
+        rewireConnections();   // one publish for the whole batch
+    return recovered;
 }
 
 void GraphController::captureStates()
@@ -423,14 +503,7 @@ void GraphController::removeNode (const String& uid)
                 && document.canAddConnection (in.otherUid, in.otherCh, out.otherUid, out.otherCh))
                 document.addConnection (in.otherUid, in.otherCh, out.otherUid, out.otherCh);
 
-    const auto it = uidToNodeId.find (uid);
-    if (it != uidToNodeId.end())
-    {
-        PluginWindow::closeCurrentlyOpenWindowsFor (it->second);   // synchronous, no pump
-        removeNodeBatched (it->second);   // published by rewireConnections() below
-        uidToNodeId.erase (it);
-    }
-    missingPlugins.erase (uid);
+    removePluginNodeFromGraph (uid);   // published by rewireConnections() below
 
     rewireConnections();   // re-derives edges + runtime strips; instances untouched
 }

@@ -20,6 +20,7 @@
 // available-plugins ids start at 0x324503f4 — nothing else claims 3.
 static constexpr int kShowWindowMenuId = 3;
 static constexpr int kMonoInputMenuId  = 6;   // checkable "Mono Input" toggle
+static constexpr int kRetryMissingMenuId = 7; // "Retry missing plugins (N)", shown only when N > 0
 
 class IconMenu::PluginListWindow : public DocumentWindow
 {
@@ -301,6 +302,9 @@ void IconMenu::timerCallback()
         }
         menu.addSeparator();
         menu.addSectionHeader ("Active Plugins");
+        // Missing plugins stay pass-through until retried explicitly (finding 6).
+        if (const int numMissing = controller.getNumMissingPlugins(); numMissing > 0)
+            menu.addItem (kRetryMissingMenuId, "Retry missing plugins (" + String (numMissing) + ")");
         // The serial-chain ops (add/delete/move) rewrite the graph as a straight
         // chain, which would clobber parallel routing made on the canvas — so
         // they are only offered while the graph is still a linear chain.
@@ -426,6 +430,14 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
         settings.setValue ("monoInput", on);
         settings.saveIfNeeded();
         return im->startTimer (50);
+    }
+    // Retry plugins that failed to load. The document is unchanged (their saved
+    // state was kept), so there is nothing to save; just rebuild the cards.
+    if (id == kRetryMissingMenuId)
+    {
+        if (im->controller.retryMissingPlugins() > 0 && im->mainWindow != nullptr)
+            im->mainWindow->refreshChain();
+        return;
     }
     // Preset switch (from the tray Presets submenu). Handled first so it never
     // falls through to the serial chain-op decoding below.

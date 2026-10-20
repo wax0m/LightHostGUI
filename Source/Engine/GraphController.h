@@ -61,6 +61,16 @@ public:
     AudioProcessorGraph::Node* getNodeForUid (const String& uid) const;
     bool isMissing (const String& uid) const noexcept { return missingPlugins.count (uid) > 0; }
 
+    // Missing plugins (round-3 finding 6, option c). A plugin that failed to load
+    // runs as a PassThrough stand-in until it is EXPLICITLY retried: edits never
+    // re-instantiate it (a synchronous load on every gesture could block the UI for
+    // seconds). On success the stand-in becomes the real plugin under the same uid
+    // (saved state + bypass restored, wiring re-derived from the document, other
+    // instances untouched) with ONE publish; on failure nothing changes or publishes.
+    int  getNumMissingPlugins() const noexcept { return (int) missingPlugins.size(); }
+    bool retryMissingPlugin (const String& uid);   // true when the plugin is live again
+    int  retryMissingPlugins();                     // number recovered; one publish for all
+
     //==============================================================================
     // Master meter taps for the GUI (message-thread reads). Null until the first
     // rebuild, or if the corresponding IO node is absent. Meters are spliced into
@@ -154,6 +164,11 @@ private:
     // + missingPlugins entry when the plugin can't load) and register it in
     // uidToNodeId. Shared by rebuildNow and the incremental add paths.
     AudioProcessorGraph::Node* addPluginNodeToGraph (const ValueTree& nodeTree);
+    std::unique_ptr<AudioProcessor> createPluginInstanceFor (const ValueTree& nodeTree);   // nullptr if it can't load
+    AudioProcessorGraph::Node* registerPluginNode (const ValueTree& nodeTree, std::unique_ptr<AudioProcessor> instance);
+    // Teardown mirror of addPluginNodeToGraph: every per-uid runtime map is cleaned here.
+    void removePluginNodeFromGraph (const String& uid);
+    bool swapInRecoveredPlugin (const String& uid);   // stand-in -> real plugin; no publish
 
     // Meter plumbing (runtime only).
     void insertMasterMeters();

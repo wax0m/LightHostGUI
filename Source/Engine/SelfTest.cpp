@@ -1367,6 +1367,101 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test Q — missing-plugin retry (round-3 finding 6). Edits never re-load a
+    //          missing plugin; an explicit retry does. Missing nodes are
+    //          fabricated as in Test K (pA pointed at a nonexistent file). A retry
+    //          that still fails must change and publish nothing. Then the document
+    //          description is "repaired" (as if the plugin came back) and the retry
+    //          must swap the stand-in for the real plugin: bypass restored, other
+    //          instances untouched, exactly one publish — also for a batch of two.
+    //==========================================================================
+    std::cout << "\n[Q] missing-plugin retry" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("retrymissing");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        PluginDescription bogus = pA;
+        bogus.name             = "DeliberatelyMissing";
+        bogus.fileOrIdentifier = File::getSpecialLocation (File::tempDirectory)
+                                     .getChildFile ("lighthost_no_such_plugin_zzz.vst3")
+                                     .getFullPathName();
+
+        const String live = controller.addPlugin (pA);
+        const String m1   = controller.addPlugin (bogus);
+        const String m2   = controller.addPlugin (bogus);
+        const String m3   = controller.addPlugin (bogus);
+        r.expect (live.isNotEmpty() && m1.isNotEmpty() && m2.isNotEmpty() && m3.isNotEmpty(),
+                  "retry-test nodes created");
+        r.expect (controller.getNumMissingPlugins() == 3, "three stand-ins reported missing");
+
+        auto* const liveNode = controller.getNodeForUid (live);
+        AudioProcessor* const liveInstance = liveNode != nullptr ? liveNode->getProcessor() : nullptr;
+        const auto edgesBefore = controller.getConnections().size();
+
+        // 1. Still unavailable: nothing changes, nothing is published.
+        int before = controller.getPublishCount();
+        r.expect (! controller.retryMissingPlugin (m1), "retry of a still-missing plugin reports failure");
+        r.expect (controller.retryMissingPlugins() == 0, "batch retry recovers nothing while all are still missing");
+        r.expect (controller.getPublishCount() == before, "failed retries publish nothing");
+        r.expect (controller.getNumMissingPlugins() == 3, "failed retries keep every stand-in");
+
+        // "Repair" a node: give it pA's real description, as if the plugin came back.
+        const auto repair = [&controller, &pA] (const String& uid)
+        {
+            ValueTree node = controller.document.getNodeByUid (uid);
+            node.removeChild (node.getChildWithName ("PLUGIN"), nullptr);
+            if (auto xml = pA.createXml())
+                node.appendChild (ValueTree::fromXml (*xml), nullptr);
+        };
+
+        // 2. Single retry: m1 comes back, and its doc bypass flag survives the swap.
+        controller.setBypassed (m1, true);
+        repair (m1);
+        before = controller.getPublishCount();
+        r.expect (controller.retryMissingPlugin (m1), "retry succeeds once the plugin is available");
+        r.expect (controller.getPublishCount() - before == 1, "a successful retry publishes exactly once");
+        r.expect (! controller.isMissing (m1), "recovered node is no longer missing");
+        auto* const m1Node = controller.getNodeForUid (m1);
+        r.expect (m1Node != nullptr && dynamic_cast<PassThroughProcessor*> (m1Node->getProcessor()) == nullptr,
+                  "recovered node runs the real plugin, not the stand-in");
+        r.expect (m1Node != nullptr && m1Node->isBypassed(), "recovered node keeps its bypass flag");
+        auto* const liveAfter = controller.getNodeForUid (live);
+        r.expect (liveAfter != nullptr && liveAfter->getProcessor() == liveInstance,
+                  "other plugin instances are untouched by a retry");
+        r.expect (controller.getConnections().size() == edgesBefore, "retry keeps the document wiring");
+
+        // 3. Batch retry: two repaired nodes, one publish.
+        repair (m2);
+        repair (m3);
+        before = controller.getPublishCount();
+        r.expect (controller.retryMissingPlugins() == 2, "batch retry recovers both repaired plugins");
+        r.expect (controller.getPublishCount() - before == 1, "batch retry publishes exactly once");
+        r.expect (controller.getNumMissingPlugins() == 0, "no stand-ins left after the batch retry");
+
+        // 4. Audio flows through the recovered chain (all bypassed => deterministic).
+        for (const auto& uid : { live, m1, m2, m3 })
+            controller.setBypassed (uid, true);
+        AudioBuffer<float> block (2, blockSize);
+        MidiBuffer midi;
+        Random rng (0x5eed0042);
+        r.expect (driveNoiseBlocks (graph, block, midi, rng, [&controller] { return controller.getOutputMeter(); }, 16) > 0.0f,
+                  "noise reaches the output through the recovered chain");
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();

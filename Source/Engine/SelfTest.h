@@ -13,7 +13,15 @@
 //    G. parallel-branch routing (arbitrary connections) rebuilds the live graph;
 //    H. per-node MIDI routing splices/unsplices the midiInputNode on toggle;
 //    I. presets round-trip: two chains snapshot into a PresetStore, survive an
-//       XML/settings round-trip, and switch back into the controller document.
+//       XML/settings round-trip, and switch back into the controller document;
+//    J. node canvas positions survive chain edits;
+//    K. a plugin that fails to load runs as a pass-through (chain not severed);
+//    L. mono input sums a one-sided source onto both channels;
+//    (M. reserved for the dry/wet branch)
+//    N. removeNode heals a branched graph and keeps live instances;
+//    O. stereo-pair connect primitives + non-stacking placement;
+//    P. exactly one render-sequence publish per user gesture;
+//    Q. an explicit retry swaps a missing plugin's stand-in for the real plugin.
 //
 //  Used by both the LightHostRuntimeTests console target and the shipping app's
 //  `-run-selftest` command-line switch, so CI can verify the real binary.

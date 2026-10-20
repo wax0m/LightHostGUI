@@ -164,6 +164,21 @@ void CanvasView::rebuildViews()
                     safe->refresh();
                 });
             };
+            card->onRetry = [this] (const juce::String& u)
+            {
+                // Deferred like onRemove: a successful retry refresh()es, which would
+                // otherwise destroy the card inside its own mouse callback.
+                auto* self = this;   // MSVC rejects `this` inside the nested init-capture
+                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<CanvasView> (self), u]
+                {
+                    if (safe == nullptr)
+                        return;
+                    if (safe->controller.retryMissingPlugin (u))
+                        safe->refresh();             // the card comes back as the live plugin
+                    else
+                        safe->markRetryFailed (u);   // stand-in kept, nothing published
+                });
+            };
             card->onDragMove = [this] (const juce::String& u, juce::Point<int> d) { moveNodeBy (u, d); };
             card->onDragEnd  = [this] (const juce::String& u) { persistNodePosition (u); };
             addAndMakeVisible (card);
@@ -173,6 +188,13 @@ void CanvasView::rebuildViews()
     }
 
     autoLayoutIfStacked();
+}
+
+void CanvasView::markRetryFailed (const juce::String& uid)
+{
+    for (auto* card : cards)
+        if (card->getUid() == uid)
+            card->markRetryFailed();
 }
 
 void CanvasView::autoLayoutIfStacked()

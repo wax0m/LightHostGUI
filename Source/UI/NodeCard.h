@@ -36,6 +36,10 @@ public:
     // Canvas-supplied structural actions.
     std::function<void (const juce::String&)> onRemove;
     std::function<void (const juce::String&)> onOpenEditor;
+    // Double-click on a MISSING card (no editor to open) asks the canvas to retry
+    // loading the plugin. On failure the canvas calls markRetryFailed().
+    std::function<void (const juce::String&)> onRetry;
+    void markRetryFailed();
 
     // Canvas-supplied node move: dragging the card BODY (not a knob or a header
     // control) reports a pixel delta in parent (canvas) coords, then a drag-end so
@@ -60,6 +64,7 @@ private:
     juce::String uid, name, format;
     bool bypassed = false;
     bool missing  = false;
+    bool retryFailed = false;   // last retry of this missing plugin failed
 
     // The two knob columns. They drive either the host gain/pan strip or the first
     // two curated plugin parameters — paramIndices decides (empty => host mode).

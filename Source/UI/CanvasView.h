@@ -88,6 +88,8 @@ public:
     void mouseUp   (const juce::MouseEvent&) override;
 
 private:
+    void markRetryFailed (const juce::String& uid);   // tell the missing card its retry failed
+
     // One placed node (IN, OUT, or a plugin card) plus which ports it exposes.
     struct NodeView
     {

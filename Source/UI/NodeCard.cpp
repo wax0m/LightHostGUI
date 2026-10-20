@@ -300,6 +300,16 @@ void NodeCard::paint (juce::Graphics& g)
         g.fillRect (15.0f, y, (float) (getWidth() - 30), 1.0f);
     }
 
+    // A missing plugin has no knobs: say what is happening and how to recover.
+    if (missing)
+    {
+        g.setColour (LightHostLookAndFeel::textSecond());
+        g.setFont (LightHostLookAndFeel::mono (9.5f));
+        g.drawFittedText (retryFailed ? "Still unavailable.\nFix the cause, then\ndouble-click to retry."
+                                      : "Plugin unavailable.\nAudio passes through.\nDouble-click to retry.",
+                          knobA.getBounds(), juce::Justification::centred, 4);
+    }
+
     // Meter labels.
     g.setColour (LightHostLookAndFeel::textTert().withAlpha (contentAlpha));
     g.setFont (LightHostLookAndFeel::mono (8.0f));
@@ -362,7 +372,18 @@ void NodeCard::mouseDoubleClick (const juce::MouseEvent& e)
     if (bypassRect.contains (e.getPosition()) || removeRect.contains (e.getPosition())
         || (showMidi && midiRect.contains (e.getPosition())))
         return;
+    if (missing)
+    {
+        if (onRetry) onRetry (uid);   // a stand-in has no editor; try to load the plugin instead
+        return;
+    }
     if (onOpenEditor) onOpenEditor (uid);
+}
+
+void NodeCard::markRetryFailed()
+{
+    retryFailed = true;
+    repaint();
 }
 
 } // namespace lighthost::ui
