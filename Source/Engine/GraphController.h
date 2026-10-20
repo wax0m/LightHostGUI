@@ -60,6 +60,10 @@ public:
     //==============================================================================
     AudioProcessorGraph::Node* getNodeForUid (const String& uid) const;
     bool isMissing (const String& uid) const noexcept { return missingPlugins.count (uid) > 0; }
+    // No usable plugin behind this node: a pass-through stand-in OR never made it into the
+    // live graph at all (e.g. an unknown type in a newer/corrupt document). The one predicate
+    // the cards, the canvas badge and the tray use.
+    bool isNodeUnavailable (const String& uid) const { return isMissing (uid) || getNodeForUid (uid) == nullptr; }
 
     // Missing plugins (round-3 finding 6, option c). A plugin that failed to load
     // runs as a PassThrough stand-in until it is EXPLICITLY retried: edits never

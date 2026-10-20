@@ -150,8 +150,8 @@ void GraphController::publishTopology()
 
 //==============================================================================
 // closeAllCurrentlyOpenWindows() below pumps the message loop for ~50 ms, so a
-// queued edit (e.g. two rapid canvas removes, deferred via callAsync) can call
-// rebuild() again while this one is mid-teardown. Coalesce: the reentrant call
+// queued edit (a preset switch via loadDocument, or clearAllPluginStates, dispatched
+// during that window) can call rebuild() again while this one is mid-teardown. Coalesce: the reentrant call
 // only flags rebuildPending, and we run one more full pass over the (already
 // updated) document once the current pass finishes.
 void GraphController::rebuild()
@@ -389,7 +389,7 @@ std::vector<GraphController::ChainItem> GraphController::getChain() const
         item.uid      = chain[i];
         item.name     = node.getProperty ("name").toString();
         item.bypassed = (bool) node.getProperty ("bypassed", false);
-        item.missing  = missingPlugins.count (item.uid) > 0;
+        item.missing  = isNodeUnavailable (item.uid);
         result.push_back (item);
     }
     return result;

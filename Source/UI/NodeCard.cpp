@@ -111,7 +111,7 @@ void NodeCard::refreshParamReadouts()
     // If the plugin has become a pass-through stand-in (or lost its live node)
     // since this card was built, its curated indices no longer exist — freeze the
     // knobs rather than polling fabricated zeros into them.
-    if (controller.isMissing (uid) || controller.getNodeForUid (uid) == nullptr)
+    if (controller.isNodeUnavailable (uid))
         return;
 
     // Poll only the 1–2 curated indices directly: re-collecting the plugin's full

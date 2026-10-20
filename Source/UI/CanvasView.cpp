@@ -142,11 +142,7 @@ void CanvasView::rebuildViews()
             item.uid      = uid;
             item.name     = n.getProperty ("name").toString();
             item.bypassed = controller.document.isBypassed (uid);
-            // Pass-through stand-ins ARE live nodes (isMissing); the getNodeForUid
-            // check additionally badges nodes that never made it into the live
-            // graph at all (e.g. an unknown type from a newer/corrupt document).
-            item.missing  = controller.isMissing (uid)
-                         || controller.getNodeForUid (uid) == nullptr;
+            item.missing  = controller.isNodeUnavailable (uid);
 
             auto* card = new NodeCard (controller, item);
             card->onOpenEditor = [this] (const juce::String& u) { if (onOpenEditor) onOpenEditor (u); };

@@ -90,7 +90,7 @@ void TitleBar::paint (juce::Graphics& g)
     const double sr  = getSampleRate ? getSampleRate() : 0.0;
     const float  cpu = getCpuLoad ? juce::jlimit (0.0f, 1.0f, (float) getCpuLoad()) : 0.0f;
 
-    auto rc = settingsRect.getX() - 12;
+    const int rc = statsClusterBounds().getRight() + 4;
     g.setColour (LightHostLookAndFeel::textTert2());
     g.setFont (LightHostLookAndFeel::mono (10.0f));
     g.drawText (sr > 0.0 ? juce::String (sr / 1000.0, 1) + " kHz" : juce::String ("--"),
@@ -118,14 +118,19 @@ void TitleBar::paint (juce::Graphics& g)
         g.fillEllipse ((float) c.x + i * 7.0f - 1.75f, (float) c.y - 1.75f, 3.5f, 3.5f);
 }
 
-// Same geometry as paint()'s right cluster: from the "CPU" label's left edge to
-// the right edge of the kHz text. Keeps the periodic stats tick from re-rasterising
-// the gradient/logo/preset tabs.
-void TitleBar::repaintStats()
+// From the "CPU" label's left edge to the right edge of the kHz text. paint() anchors the
+// cluster on this rectangle (rc = right + 4), so a width change is made in one place.
+juce::Rectangle<int> TitleBar::statsClusterBounds() const
 {
     const int rc   = settingsRect.getX() - 12;
     const int left = rc - 66 - 8 - 46 - 30;
-    repaint (left, 0, (rc - 4) - left, getHeight());
+    return { left, 0, (rc - 4) - left, getHeight() };
+}
+
+// Keeps the periodic stats tick from re-rasterising the gradient/logo/preset tabs.
+void TitleBar::repaintStats()
+{
+    repaint (statsClusterBounds());
 }
 
 void TitleBar::mouseMove (const juce::MouseEvent& e)

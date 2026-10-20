@@ -41,6 +41,10 @@ public:
     // the tabs/logo/gradient don't change, so don't rasterise the whole bar.
     void repaintStats();
 
+    // The CPU meter + sample-rate cluster, full height. paint() lays the cluster out from it
+    // and repaintStats() repaints exactly it, so the two cannot drift apart.
+    juce::Rectangle<int> statsClusterBounds() const;
+
     static constexpr int barHeight = 50;
 
     void paint (juce::Graphics&) override;
