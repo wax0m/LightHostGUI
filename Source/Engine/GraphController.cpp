@@ -409,20 +409,23 @@ juce::Point<float> GraphController::placementForNewNode() const
         const auto n = nodes.getChild (i);
         if (n.getProperty ("type").toString() == GraphDocument::typePlugin)
         {
-            maxX = jmax (maxX, (float) n.getProperty ("x", 0.15f));
+            // Positions go through the document accessors so the default for a node
+            // without x/y lives in one place (GraphDocument::getNodeX/getNodeY).
+            maxX = jmax (maxX, document.getNodeX (n.getProperty ("uid").toString()));
             anyPlugin = true;
         }
     }
 
-    const auto occupied = [&nodes] (float px, float py)
+    const auto occupied = [this, &nodes] (float px, float py)
     {
         for (int i = 0; i < nodes.getNumChildren(); ++i)
         {
             const auto n = nodes.getChild (i);
             if (n.getProperty ("type").toString() != GraphDocument::typePlugin)
                 continue;
-            if (std::abs ((float) n.getProperty ("x", 0.15f) - px) < 0.05f
-             && std::abs ((float) n.getProperty ("y", 0.5f)  - py) < 0.05f)
+            const String uid = n.getProperty ("uid").toString();
+            if (std::abs (document.getNodeX (uid) - px) < 0.05f
+             && std::abs (document.getNodeY (uid) - py) < 0.05f)
                 return true;
         }
         return false;

@@ -1328,6 +1328,43 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         f.deleteFile();
     }
 
+    // Test O (cont.) — placement reads positions through the document accessors, so a node
+    //          that has no x/y property is treated as sitting at the accessor default
+    //          (0.5, 0.5) and a new add never lands on top of it.
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("placementdefault");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        const String a = controller.addNodeUnconnected (pA);
+        const String b = controller.addNodeUnconnected (pA);
+        r.expect (a.isNotEmpty() && b.isNotEmpty(), "placement-default plugins instantiated");
+
+        // a sits at x = 0.38, so the next add would target x = 0.5; b has no position at all
+        // and is therefore at the default (0.5, 0.5) — exactly where that add would land.
+        controller.setNodePosition (a, 0.38f, 0.2f);
+        ValueTree bTree = controller.document.getNodeByUid (b);
+        bTree.removeProperty ("x", nullptr);
+        bTree.removeProperty ("y", nullptr);
+
+        const String c = controller.addNodeUnconnected (pA);
+        r.expect (c.isNotEmpty(), "third plugin instantiated");
+        const bool onTopOfB = std::abs (controller.getNodeX (c) - 0.5f) < 0.05f
+                           && std::abs (controller.getNodeY (c) - 0.5f) < 0.05f;
+        r.expect (! onTopOfB, "a new node does not land on a node that has no stored position");
+
+        f.deleteFile();
+    }
+
     //==========================================================================
     // Test P — one render-sequence publish per user gesture. Tests N/O render on the
     //          message thread between gestures, so they cannot see intermediate
