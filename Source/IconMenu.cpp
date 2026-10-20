@@ -305,12 +305,12 @@ void IconMenu::timerCallback()
         // Missing plugins stay pass-through until retried explicitly (finding 6).
         if (const int numMissing = controller.getNumMissingPlugins(); numMissing > 0)
             menu.addItem (kRetryMissingMenuId, "Retry missing plugins (" + String (numMissing) + ")");
-        // The serial-chain ops (add/delete/move) rewrite the graph as a straight
-        // chain, which would clobber parallel routing made on the canvas — so
-        // they are only offered while the graph is still a linear chain.
+        // Move Up/Down rewrite the graph as a straight chain, which would clobber
+        // parallel routing made on the canvas — so only they are gated on a linear chain.
+        // Add and Delete are safe on a branched graph.
         const bool linear = controller.isLinearChain();
         if (! linear)
-            menu.addItem (4, "Chain edits disabled: graph has parallel routing - edit on the canvas.", false);
+            menu.addItem (4, "Move Up/Down disabled: graph has parallel routing - edit on the canvas.", false);
         // Active plugins. Every per-plugin item carries its uid in an action lambda, so
         // an item always acts on the plugin its label named, even if a second tray click
         // rebuilt the menu or the graph changed while this one was open. Uids are
@@ -370,11 +370,9 @@ void IconMenu::timerCallback()
         }
         menu.addSeparator();
         menu.addSectionHeader ("Available Plugins");
-        // All plugins (adding appends serially, so it is gated like the other chain ops)
-        if (linear)
-            KnownPluginList::addToMenu (menu, knownPluginList.getTypes(), pluginSortMethod);
-        else
-            menu.addItem (5, "Chain edits disabled: graph has parallel routing - edit on the canvas.", false);
+        // All plugins. addPlugin appends serially on a linear chain and adds unconnected
+        // on a branched graph, so adding is never gated.
+        KnownPluginList::addToMenu (menu, knownPluginList.getTypes(), pluginSortMethod);
     }
     else
     {
