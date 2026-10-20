@@ -26,7 +26,7 @@ public:
     static void menuInvocationCallback (int id, IconMenu*);
     void changeListenerCallback (ChangeBroadcaster* changed) override;
 
-    const int INDEX_EDIT, INDEX_BYPASS, INDEX_DELETE, INDEX_MOVE_UP, INDEX_MOVE_DOWN, INDEX_PRESET;
+    const int INDEX_PRESET;
 
 private:
     void timerCallback() override;
@@ -55,11 +55,6 @@ private:
     KnownPluginList::SortMethod pluginSortMethod;
     PopupMenu menu;
     bool menuIconLeftClicked;
-    // Chain uids snapshotted when the tray menu is BUILT. Item ids encode an index
-    // into this snapshot; resolving against a fresh getChain() at invocation time
-    // could map the index onto a different plugin if the graph changed while the
-    // menu was open (and delete the wrong node). Uids are re-validated on use.
-    std::vector<String> menuChainUids;
     AudioProcessorGraph graph;
     AudioProcessorPlayer player;
     GraphController controller { graph, formatManager };

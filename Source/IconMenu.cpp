@@ -16,7 +16,7 @@
 #endif
 
 // Left-click menu id for "Show Editor Window". Safe: the fixed items use 1/2,
-// the per-plugin submenus use INDEX_* (>= 1,000,000), and KnownPluginList's
+// the preset items use INDEX_PRESET (>= 6,000,000), and KnownPluginList's
 // available-plugins ids start at 0x324503f4 — nothing else claims 3.
 static constexpr int kShowWindowMenuId = 3;
 static constexpr int kMonoInputMenuId  = 6;   // checkable "Mono Input" toggle
@@ -67,7 +67,7 @@ private:
     IconMenu& owner;
 };
 
-IconMenu::IconMenu() : INDEX_EDIT (1000000), INDEX_BYPASS (2000000), INDEX_DELETE (3000000), INDEX_MOVE_UP (4000000), INDEX_MOVE_DOWN (5000000), INDEX_PRESET (6000000)
+IconMenu::IconMenu() : INDEX_PRESET (6000000)
 {
     // Initialization
     addDefaultFormatsToManager (formatManager);   // JUCE 8: replaces AudioPluginFormatManager::addDefaultFormats()
@@ -311,26 +311,61 @@ void IconMenu::timerCallback()
         const bool linear = controller.isLinearChain();
         if (! linear)
             menu.addItem (4, "Chain edits disabled: graph has parallel routing - edit on the canvas.", false);
-        // Active plugins. Snapshot the uid per menu index NOW — the invocation
-        // callback resolves ids against this snapshot, not a fresh chain, so a
-        // graph edit made while the menu is open can never shift the mapping.
+        // Active plugins. Every per-plugin item carries its uid in an action lambda, so
+        // an item always acts on the plugin its label named, even if a second tray click
+        // rebuilt the menu or the graph changed while this one was open. Uids are
+        // re-validated at fire time: a stale click is a no-op.
         const auto chain = controller.getChain();
-        menuChainUids.clear();
-        for (const auto& item : chain)
-            menuChainUids.push_back (item.uid);
         for (int i = 0; i < (int) chain.size(); i++)
         {
             const auto& item = chain[(size_t) i];
+            const String uid = item.uid;
+
+            // Runs `edit` on the plugin if it still exists, then persists, refreshes the
+            // open editor window and re-arms the tray menu.
+            const auto onPlugin = [this, uid] (std::function<void()> edit)
+            {
+                return [this, uid, edit = std::move (edit)]
+                {
+                    if (! controller.document.getNodeByUid (uid).isValid())
+                        return;
+                    edit();
+                    controller.save (*getAppProperties().getUserSettings());
+                    if (mainWindow != nullptr)
+                        mainWindow->refreshChain();
+                    startTimer (50);
+                };
+            };
+
             PopupMenu options;
-            options.addItem (INDEX_EDIT + i, "Edit", ! item.missing);
-            options.addItem (INDEX_BYPASS + i, "Bypass", true, item.bypassed);
+            options.addItem ("Edit", ! item.missing, false, onPlugin ([this, uid]
+            {
+                if (auto* const node = controller.getNodeForUid (uid))
+                    if (auto* const w = PluginWindow::getWindowFor (node, PluginWindow::Normal))
+                        w->toFront (true);
+            }));
+            options.addItem ("Bypass", true, item.bypassed, onPlugin ([this, uid]
+            {
+                // Toggles the CURRENT doc state, not the state at menu-build time.
+                controller.setBypassed (uid, ! controller.document.isBypassed (uid));
+            }));
             options.addSeparator();
-            options.addItem (INDEX_MOVE_UP + i, "Move Up", linear && i > 0);
-            options.addItem (INDEX_MOVE_DOWN + i, "Move Down", linear && i < (int) chain.size() - 1);
+            // Serial moves are re-checked at fire time: the menu may predate a canvas
+            // edit that branched the graph.
+            options.addItem ("Move Up", linear && i > 0, false, onPlugin ([this, uid]
+            {
+                if (controller.isLinearChain())
+                    controller.moveUp (uid);
+            }));
+            options.addItem ("Move Down", linear && i < (int) chain.size() - 1, false, onPlugin ([this, uid]
+            {
+                if (controller.isLinearChain())
+                    controller.moveDown (uid);
+            }));
             options.addSeparator();
             // Delete heals around the node (removeNode), so unlike the serial
             // move/add ops it is safe on a branched graph and stays enabled.
-            options.addItem (INDEX_DELETE + i, "Delete", true);
+            options.addItem ("Delete", true, false, onPlugin ([this, uid] { controller.removeNode (uid); }));
             menu.addSubMenu (item.missing ? item.name + " (missing)" : item.name, options);
         }
         menu.addSeparator();
@@ -443,82 +478,17 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     // falls through to the serial chain-op decoding below.
     if (id >= im->INDEX_PRESET && id < im->INDEX_PRESET + 1000000)
         return im->switchToPreset (id - im->INDEX_PRESET);
-    // Plugins
-    if (id > 2)
+    // Add plugin (appends while linear, adds unconnected on a branched graph). The
+    // per-plugin items (Edit/Bypass/Move/Delete) are action lambdas, not ids.
+    if (id > 2 && KnownPluginList::getIndexChosenByMenu (im->knownPluginList.getTypes(), id) > -1)
     {
-        // Serial ops are re-checked at invocation time: the menu may have been
-        // built before a canvas edit branched the graph.
-        const bool linear = im->controller.isLinearChain();
-        // Resolve ids against the uid snapshot taken when the menu was BUILT (the
-        // labels the user is looking at), then re-validate the uid still exists —
-        // a stale click must be a no-op, never act on a different plugin.
-        const auto chainUidForId = [im] (int itemId, int base) -> String
-        {
-            const int index = itemId - base;
-            if (index < 0 || index >= (int) im->menuChainUids.size())
-                return {};
-            const String uid = im->menuChainUids[(size_t) index];
-            return im->controller.document.getNodeByUid (uid).isValid() ? uid : String();
-        };
-
-        // Delete plugin (removeNode heals around it — safe on branched graphs, so
-        // it is not gated on `linear` like the serial move/add ops)
-        if (id >= im->INDEX_DELETE && id < im->INDEX_DELETE + 1000000)
-        {
-            if (const String uid = chainUidForId (id, im->INDEX_DELETE); uid.isNotEmpty())
-            {
-                im->controller.removeNode (uid);
-                im->controller.save (settings);
-            }
-        }
-        // Add plugin (appends while linear, adds unconnected on a branched graph)
-        else if (KnownPluginList::getIndexChosenByMenu (im->knownPluginList.getTypes(), id) > -1)
-        {
-            const auto knownTypes = im->knownPluginList.getTypes();
-            const PluginDescription plugin = knownTypes[KnownPluginList::getIndexChosenByMenu (knownTypes, id)];
-            im->controller.addPlugin (plugin);
-            im->controller.save (settings);
-        }
-        // Bypass plugin (live pass-through, no rebuild). Toggles the CURRENT doc
-        // state, not the state snapshotted at menu-build time.
-        else if (id >= im->INDEX_BYPASS && id < im->INDEX_BYPASS + 1000000)
-        {
-            if (const String uid = chainUidForId (id, im->INDEX_BYPASS); uid.isNotEmpty())
-            {
-                im->controller.setBypassed (uid, ! im->controller.document.isBypassed (uid));
-                im->controller.save (settings);
-            }
-        }
-        // Show active plugin GUI
-        else if (id >= im->INDEX_EDIT && id < im->INDEX_EDIT + 1000000)
-        {
-            if (const String uid = chainUidForId (id, im->INDEX_EDIT); uid.isNotEmpty())
-                if (auto* const node = im->controller.getNodeForUid (uid))
-                    if (auto* const w = PluginWindow::getWindowFor (node, PluginWindow::Normal))
-                        w->toFront (true);
-        }
-        // Move plugin up the list
-        else if (id >= im->INDEX_MOVE_UP && id < im->INDEX_MOVE_UP + 1000000)
-        {
-            if (const String uid = chainUidForId (id, im->INDEX_MOVE_UP); uid.isNotEmpty() && linear)
-            {
-                im->controller.moveUp (uid);
-                im->controller.save (settings);
-            }
-        }
-        // Move plugin down the list
-        else if (id >= im->INDEX_MOVE_DOWN && id < im->INDEX_MOVE_DOWN + 1000000)
-        {
-            if (const String uid = chainUidForId (id, im->INDEX_MOVE_DOWN); uid.isNotEmpty() && linear)
-            {
-                im->controller.moveDown (uid);
-                im->controller.save (settings);
-            }
-        }
-        // Reflect any chain change in the open editor window.
+        const auto knownTypes = im->knownPluginList.getTypes();
+        const PluginDescription plugin = knownTypes[KnownPluginList::getIndexChosenByMenu (knownTypes, id)];
+        im->controller.addPlugin (plugin);
+        im->controller.save (settings);
+        // Reflect the chain change in the open editor window, then update the menu.
         if (im->mainWindow != nullptr)
             im->mainWindow->refreshChain();
-        // Update menu
         im->startTimer (50);
     }
 }
