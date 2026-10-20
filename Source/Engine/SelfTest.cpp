@@ -1290,6 +1290,17 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         r.expect (! controller.document.hasConnection (p1, 0, p2, 0)
                && ! controller.document.hasConnection (p1, 1, p2, 1), "disconnectPair removes both channels");
 
+        // A crossed edge (hand-edited/legacy document) is drawn as part of the same cable,
+        // so disconnectPair must remove it too.
+        controller.document.addConnection (p1, 0, p2, 1);
+        controller.document.addConnection (p1, 1, p2, 1);
+        controller.disconnectPair (p1, p2);
+        int leftover = 0;
+        for (const auto& c : controller.getConnections())
+            if (c.srcUid == p1 && c.dstUid == p2)
+                ++leftover;
+        r.expect (leftover == 0, "disconnectPair removes crossed and mono edges between the pair");
+
         // Placement: six more adds march right, saturate at x=0.9, then cascade
         // down — every plugin node must end up on its own spot.
         for (int i = 0; i < 6; ++i)

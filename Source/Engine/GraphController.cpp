@@ -923,8 +923,21 @@ bool GraphController::connectPair (const String& srcUid, const String& dstUid)
 
 void GraphController::disconnectPair (const String& srcUid, const String& dstUid)
 {
-    for (int ch = 0; ch < 2; ++ch)
-        document.removeConnection (srcUid, ch, dstUid, ch);
+    // The canvas draws ONE cable for every document edge between this node pair, whatever
+    // its channels, so removing the cable must remove all of them (a crossed or lone mono
+    // edge from a legacy/hand-edited document would otherwise be an undeletable cable).
+    struct Edge { int srcCh, dstCh; };
+    std::vector<Edge> edges;
+    const ValueTree connections = document.getConnections();
+    for (int i = 0; i < connections.getNumChildren(); ++i)
+    {
+        const ValueTree c = connections.getChild (i);
+        if (c.getProperty ("srcUid").toString() == srcUid && c.getProperty ("dstUid").toString() == dstUid)
+            edges.push_back ({ (int) c.getProperty ("srcCh"), (int) c.getProperty ("dstCh") });
+    }
+
+    for (const auto& e : edges)
+        document.removeConnection (srcUid, e.srcCh, dstUid, e.dstCh);
     rewireConnections();
 }
 
