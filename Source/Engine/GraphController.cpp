@@ -484,27 +484,27 @@ String GraphController::addNodeUnconnected (const PluginDescription& desc)
 // objects are torn down: no plugin is reloaded and no other editor is closed.
 void GraphController::removeNode (const String& uid)
 {
-    struct Edge { String otherUid; int otherCh; int nodeCh; };
-    std::vector<Edge> ins;    // X -> node
-    std::vector<Edge> outs;   // node -> Y
+    std::vector<Connection> ins;    // X -> node, verbatim
+    std::vector<Connection> outs;   // node -> Y, verbatim
 
     for (const auto& c : getConnections())
     {
         if (c.dstUid == uid)
-            ins.push_back  ({ c.srcUid, c.srcCh, c.dstCh });
+            ins.push_back (c);
         else if (c.srcUid == uid)
-            outs.push_back ({ c.dstUid, c.dstCh, c.srcCh });
+            outs.push_back (c);
     }
 
     document.removeNode (uid);   // also drops the node's own connections
 
-    // canAddConnection dedupes an already-existing parallel edge; healing cannot
-    // create a cycle because the path src -> node -> dst existed before the delete.
+    // Bridge (in.src, in.srcCh) -> (out.dst, out.dstCh) where the channel continues through
+    // the node (in.dstCh == out.srcCh). canAddConnection dedupes an already-existing parallel
+    // edge; healing cannot create a cycle because the path src -> node -> dst existed before.
     for (const auto& in : ins)
         for (const auto& out : outs)
-            if (in.nodeCh == out.nodeCh
-                && document.canAddConnection (in.otherUid, in.otherCh, out.otherUid, out.otherCh))
-                document.addConnection (in.otherUid, in.otherCh, out.otherUid, out.otherCh);
+            if (in.dstCh == out.srcCh
+                && document.canAddConnection (in.srcUid, in.srcCh, out.dstUid, out.dstCh))
+                document.addConnection (in.srcUid, in.srcCh, out.dstUid, out.dstCh);
 
     removePluginNodeFromGraph (uid);   // published by rewireConnections() below
 

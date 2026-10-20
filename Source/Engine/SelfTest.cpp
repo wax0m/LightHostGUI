@@ -120,13 +120,43 @@ namespace
         return std::make_unique<PropertiesFile> (f, o);
     }
 
+    // Graph + controller + settings file for one runtime test block; the temp settings file
+    // is deleted on destruction. Declaration order = construction order.
+    struct GraphFixture
+    {
+        GraphFixture (AudioPluginFormatManager& fm, const String& name, double sr = 44100.0, int blockSize = 512)
+            : file (tempSettingsFile (name))
+        {
+            file.deleteFile();
+            graph.setPlayConfigDetails (2, 2, sr, blockSize);
+            graph.prepareToPlay (sr, blockSize);
+            settings   = makeSettings (file);
+            controller = std::make_unique<GraphController> (graph, fm);
+            controller->loadFrom (*settings);
+        }
+
+        ~GraphFixture()
+        {
+            controller.reset();
+            settings.reset();
+            file.deleteFile();
+        }
+
+        File file;
+        std::unique_ptr<PropertiesFile> settings;
+        AudioProcessorGraph graph;
+        std::unique_ptr<GraphController> controller;
+    };
+
     // Fill the stereo block with white noise, process `count` blocks through the
     // graph, and return the highest ch0 peak the meter saw. The meter is re-fetched
     // per block via `meterProvider` so a caller can keep driving across graph edits
     // (meters are re-spliced on every rewire). Processing many blocks lets any
-    // plugin latency fill through before the peak is sampled.
+    // plugin latency fill through before the peak is sampled. `onBlock` (optional) runs
+    // after every processed block, for callers that sample several meters themselves.
     float driveNoiseBlocks (AudioProcessorGraph& graph, AudioBuffer<float>& block, MidiBuffer& midi,
-                            Random& rng, const std::function<const MeterTap*()>& meterProvider, int count)
+                            Random& rng, const std::function<const MeterTap*()>& meterProvider, int count,
+                            const std::function<void()>& onBlock = {})
     {
         float maxPeak = 0.0f;
         for (int b = 0; b < count; ++b)
@@ -141,6 +171,8 @@ namespace
             graph.processBlock (block, midi);
             if (const MeterTap* m = meterProvider())
                 maxPeak = jmax (maxPeak, m->read().peak[0]);
+            if (onBlock)
+                onBlock();
         }
         return maxPeak;
     }
@@ -820,20 +852,12 @@ int runSelfTest (const StringArray& explicitPluginPaths)
             const MeterTap* mB   = controller.getNodeMeter (uidB);
             const MeterTap* mOut = controller.getOutputMeter();
             maxA = maxB = maxOut = lastB = 0.0f;
-            for (int b = 0; b < count; ++b)
+            driveNoiseBlocks (graph, block, midi, rng, [] { return nullptr; }, count, [&]
             {
-                for (int ch = 0; ch < 2; ++ch)
-                {
-                    float* d = block.getWritePointer (ch);
-                    for (int i = 0; i < blockSize; ++i)
-                        d[i] = (rng.nextFloat() * 2.0f - 1.0f) * 0.5f;
-                }
-                midi.clear();
-                graph.processBlock (block, midi);
                 if (mA   != nullptr) maxA   = jmax (maxA,   mA->read().peak[0]);
                 if (mB   != nullptr) { lastB = mB->read().peak[0]; maxB = jmax (maxB, lastB); }
                 if (mOut != nullptr) maxOut = jmax (maxOut, mOut->read().peak[0]);
-            }
+            });
             return controller.getNodeMeter (uidA) != nullptr
                 && controller.getNodeMeter (uidB) != nullptr
                 && controller.getOutputMeter()    != nullptr;
@@ -1247,18 +1271,9 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     //==========================================================================
     std::cout << "\n[O] stereo-pair primitives + non-stacking placement" << std::endl;
     {
-        const double sr        = 44100.0;
-        const int    blockSize = 512;
-
-        AudioProcessorGraph graph;
-        graph.setPlayConfigDetails (2, 2, sr, blockSize);
-        graph.prepareToPlay (sr, blockSize);
-
-        GraphController controller (graph, formatManager);
-        const File f = tempSettingsFile ("pairplacement");
-        f.deleteFile();
-        auto settings = makeSettings (f);
-        controller.loadFrom (*settings);
+        GraphFixture fx (formatManager, "pairplacement");
+        GraphController& controller = *fx.controller;
+        auto& settings = fx.settings;
 
         const String in  = controller.document.getIoNodeUid (true);
         const String p1  = controller.appendToChain (pA);
@@ -1325,25 +1340,14 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         r.expect (! anyStacked, "no two placed nodes share a spot (anti-stacking cascade)");
 
         controller.save (*settings);
-        f.deleteFile();
     }
 
     // Test O (cont.) — placement reads positions through the document accessors, so a node
     //          that has no x/y property is treated as sitting at the accessor default
     //          (0.5, 0.5) and a new add never lands on top of it.
     {
-        const double sr        = 44100.0;
-        const int    blockSize = 512;
-
-        AudioProcessorGraph graph;
-        graph.setPlayConfigDetails (2, 2, sr, blockSize);
-        graph.prepareToPlay (sr, blockSize);
-
-        GraphController controller (graph, formatManager);
-        const File f = tempSettingsFile ("placementdefault");
-        f.deleteFile();
-        auto settings = makeSettings (f);
-        controller.loadFrom (*settings);
+        GraphFixture fx (formatManager, "placementdefault");
+        GraphController& controller = *fx.controller;
 
         const String a = controller.addNodeUnconnected (pA);
         const String b = controller.addNodeUnconnected (pA);
@@ -1362,7 +1366,6 @@ int runSelfTest (const StringArray& explicitPluginPaths)
                            && std::abs (controller.getNodeY (c) - 0.5f) < 0.05f;
         r.expect (! onTopOfB, "a new node does not land on a node that has no stored position");
 
-        f.deleteFile();
     }
 
     //==========================================================================
@@ -1373,18 +1376,9 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     //==========================================================================
     std::cout << "\n[P] exactly one topology publish per gesture" << std::endl;
     {
-        const double sr        = 44100.0;
-        const int    blockSize = 512;
-
-        AudioProcessorGraph graph;
-        graph.setPlayConfigDetails (2, 2, sr, blockSize);
-        graph.prepareToPlay (sr, blockSize);
-
-        GraphController controller (graph, formatManager);
-        const File f = tempSettingsFile ("publishcount");
-        f.deleteFile();
-        auto settings = makeSettings (f);
-        controller.loadFrom (*settings);
+        GraphFixture fx (formatManager, "publishcount");
+        GraphController& controller = *fx.controller;
+        auto& settings = fx.settings;
 
         const auto publishesDuring = [&controller] (const std::function<void()>& gesture)
         {
@@ -1411,7 +1405,6 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         r.expect (publishesDuring ([&] { controller.loadDocument (snapshot); }) == 1, "loadDocument publishes once");
 
         controller.save (*settings);
-        f.deleteFile();
     }
 
     //==========================================================================
@@ -1425,18 +1418,11 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     //==========================================================================
     std::cout << "\n[Q] missing-plugin retry" << std::endl;
     {
-        const double sr        = 44100.0;
-        const int    blockSize = 512;
-
-        AudioProcessorGraph graph;
-        graph.setPlayConfigDetails (2, 2, sr, blockSize);
-        graph.prepareToPlay (sr, blockSize);
-
-        GraphController controller (graph, formatManager);
-        const File f = tempSettingsFile ("retrymissing");
-        f.deleteFile();
-        auto settings = makeSettings (f);
-        controller.loadFrom (*settings);
+        const int blockSize = 512;
+        GraphFixture fx (formatManager, "retrymissing");
+        GraphController& controller = *fx.controller;
+        auto& settings = fx.settings;
+        AudioProcessorGraph& graph = fx.graph;
 
         PluginDescription bogus = pA;
         bogus.name             = "DeliberatelyMissing";
@@ -1506,7 +1492,6 @@ int runSelfTest (const StringArray& explicitPluginPaths)
                   "noise reaches the output through the recovered chain");
 
         controller.save (*settings);
-        f.deleteFile();
     }
 
     //==========================================================================
