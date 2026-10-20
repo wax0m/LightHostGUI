@@ -111,6 +111,44 @@ void GraphController::rewriteChainConnections (const std::vector<String>& chainU
 }
 
 //==============================================================================
+// Batched graph mutation. AudioProcessorGraph defaults every add/remove/clear to
+// UpdateKind::sync, which builds and publishes a render sequence to the audio thread
+// per call (including half-wired intermediate topologies, even an all-disconnected
+// one). These wrappers are the ONLY place graph.addNode/removeNode/addConnection/
+// removeConnection/clear may be called; they never publish. A user gesture ends with
+// exactly one publishTopology().
+AudioProcessorGraph::Node::Ptr GraphController::addNodeBatched (std::unique_ptr<AudioProcessor> p)
+{
+    return graph.addNode (std::move (p), std::nullopt, AudioProcessorGraph::UpdateKind::none);
+}
+
+AudioProcessorGraph::Node::Ptr GraphController::removeNodeBatched (AudioProcessorGraph::NodeID id)
+{
+    return graph.removeNode (id, AudioProcessorGraph::UpdateKind::none);
+}
+
+bool GraphController::connectBatched (const AudioProcessorGraph::Connection& c)
+{
+    return graph.addConnection (c, AudioProcessorGraph::UpdateKind::none);
+}
+
+bool GraphController::disconnectBatched (const AudioProcessorGraph::Connection& c)
+{
+    return graph.removeConnection (c, AudioProcessorGraph::UpdateKind::none);
+}
+
+void GraphController::clearBatched()
+{
+    graph.clear (AudioProcessorGraph::UpdateKind::none);
+}
+
+void GraphController::publishTopology()
+{
+    graph.rebuild();
+    ++publishCount;
+}
+
+//==============================================================================
 // closeAllCurrentlyOpenWindows() below pumps the message loop for ~50 ms, so a
 // queued edit (e.g. two rapid canvas removes, deferred via callAsync) can call
 // rebuild() again while this one is mid-teardown. Coalesce: the reentrant call
@@ -138,7 +176,7 @@ void GraphController::rebuildNow()
     // dispatch queued edits, which are only safe because the live graph and
     // uidToNodeId are still intact at that point — never move teardown above it.
     PluginWindow::closeAllCurrentlyOpenWindows();
-    graph.clear();
+    clearBatched();
     uidToNodeId.clear();
     inputMeter = outputMeter = nullptr;
     nodeStrips.clear();
@@ -169,7 +207,7 @@ void GraphController::rebuildNow()
 
         if (processor != nullptr)
         {
-            if (auto node = graph.addNode (std::move (processor)))
+            if (auto node = addNodeBatched (std::move (processor)))
             {
                 node->setBypassed ((bool) nodeTree.getProperty ("bypassed", false));
                 uidToNodeId[uid] = node->nodeID;
@@ -184,7 +222,7 @@ void GraphController::rebuildNow()
         const auto src = uidToNodeId.find (c.getProperty ("srcUid").toString());
         const auto dst = uidToNodeId.find (c.getProperty ("dstUid").toString());
         if (src != uidToNodeId.end() && dst != uidToNodeId.end())
-            graph.addConnection ({ { src->second, (int) c.getProperty ("srcCh") },
+            connectBatched ({ { src->second, (int) c.getProperty ("srcCh") },
                                    { dst->second, (int) c.getProperty ("dstCh") } });
     }
 
@@ -192,6 +230,7 @@ void GraphController::rebuildNow()
     insertMasterMeters();
     insertInputConditioner();
     insertMidiRouting();
+    publishTopology();
 }
 
 // Instantiate one plugin document node into the live graph. On load failure the
@@ -227,7 +266,8 @@ AudioProcessorGraph::Node* GraphController::addPluginNodeToGraph (const ValueTre
         missingPlugins.insert (uid);
     }
 
-    if (auto node = graph.addNode (std::move (instance)))
+    // Not published here: every caller follows with publishTopology() (rebuildNow) or rewireConnections().
+    if (auto node = addNodeBatched (std::move (instance)))
     {
         node->setBypassed ((bool) nodeTree.getProperty ("bypassed", false));
         uidToNodeId[uid] = node->nodeID;
@@ -387,7 +427,7 @@ void GraphController::removeNode (const String& uid)
     if (it != uidToNodeId.end())
     {
         PluginWindow::closeCurrentlyOpenWindowsFor (it->second);   // synchronous, no pump
-        graph.removeNode (it->second);
+        removeNodeBatched (it->second);   // published by rewireConnections() below
         uidToNodeId.erase (it);
     }
     missingPlugins.erase (uid);
@@ -472,7 +512,7 @@ void GraphController::insertMasterMeters()
 // Redirect every X -> target connection through a new meter: X -> meter -> target.
 MeterProcessor* GraphController::spliceMeterBefore (AudioProcessorGraph::NodeID target)
 {
-    auto meterNode = graph.addNode (std::make_unique<MeterProcessor>());
+    auto meterNode = addNodeBatched (std::make_unique<MeterProcessor>());
     if (meterNode == nullptr)
         return nullptr;
 
@@ -482,13 +522,13 @@ MeterProcessor* GraphController::spliceMeterBefore (AudioProcessorGraph::NodeID 
     {
         if (c.destination.nodeID == target)
         {
-            graph.removeConnection (c);
-            graph.addConnection ({ c.source, { meterId, c.destination.channelIndex } });
+            disconnectBatched (c);
+            connectBatched ({ c.source, { meterId, c.destination.channelIndex } });
         }
     }
 
     for (int ch = 0; ch < MeterTap::numChannels; ++ch)
-        graph.addConnection ({ { meterId, ch }, { target, ch } });
+        connectBatched ({ { meterId, ch }, { target, ch } });
 
     return dynamic_cast<MeterProcessor*> (meterNode->getProcessor());
 }
@@ -496,7 +536,7 @@ MeterProcessor* GraphController::spliceMeterBefore (AudioProcessorGraph::NodeID 
 // Redirect every source -> Y connection through a new meter: source -> meter -> Y.
 MeterProcessor* GraphController::spliceMeterAfter (AudioProcessorGraph::NodeID source)
 {
-    auto meterNode = graph.addNode (std::make_unique<MeterProcessor>());
+    auto meterNode = addNodeBatched (std::make_unique<MeterProcessor>());
     if (meterNode == nullptr)
         return nullptr;
 
@@ -506,13 +546,13 @@ MeterProcessor* GraphController::spliceMeterAfter (AudioProcessorGraph::NodeID s
     {
         if (c.source.nodeID == source && c.destination.nodeID != meterId)
         {
-            graph.removeConnection (c);
-            graph.addConnection ({ { meterId, c.source.channelIndex }, c.destination });
+            disconnectBatched (c);
+            connectBatched ({ { meterId, c.source.channelIndex }, c.destination });
         }
     }
 
     for (int ch = 0; ch < MeterTap::numChannels; ++ch)
-        graph.addConnection ({ { source, ch }, { meterId, ch } });
+        connectBatched ({ { source, ch }, { meterId, ch } });
 
     return dynamic_cast<MeterProcessor*> (meterNode->getProcessor());
 }
@@ -537,7 +577,7 @@ void GraphController::insertInputConditioner()
 // Mirrors spliceMeterAfter but folds the stereo pair to mono.
 MonoInputProcessor* GraphController::spliceMonoAfter (AudioProcessorGraph::NodeID source)
 {
-    auto monoGraphNode = graph.addNode (std::make_unique<MonoInputProcessor>());
+    auto monoGraphNode = addNodeBatched (std::make_unique<MonoInputProcessor>());
     if (monoGraphNode == nullptr)
         return nullptr;
 
@@ -547,13 +587,13 @@ MonoInputProcessor* GraphController::spliceMonoAfter (AudioProcessorGraph::NodeI
     {
         if (c.source.nodeID == source && c.destination.nodeID != monoId)
         {
-            graph.removeConnection (c);
-            graph.addConnection ({ { monoId, c.source.channelIndex }, c.destination });
+            disconnectBatched (c);
+            connectBatched ({ { monoId, c.source.channelIndex }, c.destination });
         }
     }
 
     for (int ch = 0; ch < MeterTap::numChannels; ++ch)
-        graph.addConnection ({ { source, ch }, { monoId, ch } });
+        connectBatched ({ { source, ch }, { monoId, ch } });
 
     return dynamic_cast<MonoInputProcessor*> (monoGraphNode->getProcessor());
 }
@@ -607,7 +647,7 @@ void GraphController::insertNodeStrips()
 // carries the node's gain/pan.
 NodeStripProcessor* GraphController::spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan)
 {
-    auto stripNode = graph.addNode (std::make_unique<NodeStripProcessor>());
+    auto stripNode = addNodeBatched (std::make_unique<NodeStripProcessor>());
     if (stripNode == nullptr)
         return nullptr;
 
@@ -617,13 +657,13 @@ NodeStripProcessor* GraphController::spliceStripAfter (AudioProcessorGraph::Node
     {
         if (c.source.nodeID == source && c.destination.nodeID != stripId)
         {
-            graph.removeConnection (c);
-            graph.addConnection ({ { stripId, c.source.channelIndex }, c.destination });
+            disconnectBatched (c);
+            connectBatched ({ { stripId, c.source.channelIndex }, c.destination });
         }
     }
 
     for (int ch = 0; ch < MeterTap::numChannels; ++ch)
-        graph.addConnection ({ { source, ch }, { stripId, ch } });
+        connectBatched ({ { source, ch }, { stripId, ch } });
 
     auto* strip = dynamic_cast<NodeStripProcessor*> (stripNode->getProcessor());
     if (strip != nullptr)
@@ -726,16 +766,16 @@ void GraphController::rewireConnections()
             runtimeNodes.push_back (node->nodeID);
 
     for (auto id : runtimeNodes)
-        graph.removeNode (id);
+        removeNodeBatched (id);
 
     if (midiInputNode != nullptr)
     {
-        graph.removeNode (midiInputNode->nodeID);
+        removeNodeBatched (midiInputNode->nodeID);
         midiInputNode = nullptr;
     }
 
     for (const auto& c : graph.getConnections())
-        graph.removeConnection (c);
+        disconnectBatched (c);
 
     ValueTree connections = document.getConnections();
     for (int i = 0; i < connections.getNumChildren(); ++i)
@@ -744,7 +784,7 @@ void GraphController::rewireConnections()
         const auto src = uidToNodeId.find (c.getProperty ("srcUid").toString());
         const auto dst = uidToNodeId.find (c.getProperty ("dstUid").toString());
         if (src != uidToNodeId.end() && dst != uidToNodeId.end())
-            graph.addConnection ({ { src->second, (int) c.getProperty ("srcCh") },
+            connectBatched ({ { src->second, (int) c.getProperty ("srcCh") },
                                    { dst->second, (int) c.getProperty ("dstCh") } });
     }
 
@@ -752,6 +792,7 @@ void GraphController::rewireConnections()
     insertMasterMeters();
     insertInputConditioner();
     insertMidiRouting();
+    publishTopology();   // the only publish of this gesture
 }
 
 bool GraphController::connect (const String& srcUid, int srcCh, const String& dstUid, int dstCh)
@@ -862,12 +903,12 @@ void GraphController::insertMidiRouting()
     if (targets.empty())
         return;
 
-    midiInputNode = graph.addNode (std::make_unique<IOProcessor> (IOProcessor::midiInputNode));
+    midiInputNode = addNodeBatched (std::make_unique<IOProcessor> (IOProcessor::midiInputNode));
     if (midiInputNode == nullptr)
         return;
 
     for (auto t : targets)
-        graph.addConnection ({ { midiInputNode->nodeID, AudioProcessorGraph::midiChannelIndex },
+        connectBatched ({ { midiInputNode->nodeID, AudioProcessorGraph::midiChannelIndex },
                                { t,                      AudioProcessorGraph::midiChannelIndex } });
 }
 

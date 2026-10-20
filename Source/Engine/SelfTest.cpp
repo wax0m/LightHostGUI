@@ -1318,6 +1318,55 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test P — one render-sequence publish per user gesture. Tests N/O render on the
+    //          message thread between gestures, so they cannot see intermediate
+    //          sequences; the publish counter can. Every graph mutation is batched
+    //          (UpdateKind::none), so each gesture must publish exactly once.
+    //==========================================================================
+    std::cout << "\n[P] exactly one topology publish per gesture" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+
+        AudioProcessorGraph graph;
+        graph.setPlayConfigDetails (2, 2, sr, blockSize);
+        graph.prepareToPlay (sr, blockSize);
+
+        GraphController controller (graph, formatManager);
+        const File f = tempSettingsFile ("publishcount");
+        f.deleteFile();
+        auto settings = makeSettings (f);
+        controller.loadFrom (*settings);
+
+        const auto publishesDuring = [&controller] (const std::function<void()>& gesture)
+        {
+            const int before = controller.getPublishCount();
+            gesture();
+            return controller.getPublishCount() - before;
+        };
+
+        String p1, p2, p3;
+        r.expect (publishesDuring ([&] { p1 = controller.addPlugin (pA); }) == 1, "addPlugin (serial append) publishes once");
+        p2 = controller.addPlugin (pA);
+        p3 = controller.addPlugin (pA);
+        r.expect (p1.isNotEmpty() && p2.isNotEmpty() && p3.isNotEmpty(), "publish-test plugins instantiated");
+
+        const String p4 = controller.addNodeUnconnected (pA);
+        r.expect (publishesDuring ([&] { controller.connectPair (p3, p4); }) == 1, "connectPair publishes once");
+        r.expect (publishesDuring ([&] { controller.disconnectPair (p3, p4); }) == 1, "disconnectPair publishes once");
+        r.expect (publishesDuring ([&] { controller.moveUp (p2); }) == 1, "moveUp publishes once");
+        r.expect (publishesDuring ([&] { controller.setMonoInput (true); }) == 1, "setMonoInput publishes once");
+        r.expect (publishesDuring ([&] { controller.setNodeReceivesMidi (p1, true); }) == 1, "setNodeReceivesMidi publishes once");
+        r.expect (publishesDuring ([&] { controller.removeNode (p3); }) == 1, "removeNode publishes once");
+
+        const GraphDocument snapshot = controller.snapshotDocument();
+        r.expect (publishesDuring ([&] { controller.loadDocument (snapshot); }) == 1, "loadDocument publishes once");
+
+        controller.save (*settings);
+        f.deleteFile();
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();

@@ -126,9 +126,23 @@ public:
     float getNodeParameter (const String& uid, int index) const;
     String getNodeParameterText (const String& uid, int index) const;   // plugin's own value text
 
+    // Number of render-sequence publishes so far; a user gesture must raise it by exactly 1 (Test P).
+    int getPublishCount() const noexcept { return publishCount; }
+
     GraphDocument document;
 
 private:
+    // Batched graph mutation: the ONLY callers of graph.addNode/removeNode/addConnection/
+    // removeConnection/clear. They use UpdateKind::none; publishTopology() sends the result
+    // to the audio thread once per gesture.
+    AudioProcessorGraph::Node::Ptr addNodeBatched (std::unique_ptr<AudioProcessor>);
+    AudioProcessorGraph::Node::Ptr removeNodeBatched (AudioProcessorGraph::NodeID);
+    bool connectBatched (const AudioProcessorGraph::Connection&);
+    bool disconnectBatched (const AudioProcessorGraph::Connection&);
+    void clearBatched();
+    void publishTopology();
+    int publishCount = 0;
+
     void rebuild();                          // document -> live graph (reentrancy-safe wrapper)
     void rebuildNow();                       // the actual teardown/build pass
     void rewireConnections();                // re-wire live graph from doc WITHOUT reloading plugins
