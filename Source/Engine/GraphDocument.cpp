@@ -1,4 +1,5 @@
 #include "GraphDocument.h"
+#include <cmath>
 #include <set>
 #include <vector>
 #include <map>
@@ -141,24 +142,29 @@ String GraphDocument::getPluginState (const String& uid) const
     return getNodeByUid (uid).getProperty (idState).toString();
 }
 
+float GraphDocument::sanitise (float v, float lo, float hi, float fallback)
+{
+    return std::isfinite (v) ? jlimit (lo, hi, v) : fallback;
+}
+
 void GraphDocument::setGain (const String& uid, float g)
 {
-    getNodeByUid (uid).setProperty (idGain, g, nullptr);
+    getNodeByUid (uid).setProperty (idGain, sanitise (g, 0.0f, 2.0f, 1.0f), nullptr);
 }
 
 float GraphDocument::getGain (const String& uid) const
 {
-    return (float) getNodeByUid (uid).getProperty (idGain, 1.0f);
+    return sanitise ((float) getNodeByUid (uid).getProperty (idGain, 1.0f), 0.0f, 2.0f, 1.0f);
 }
 
 void GraphDocument::setPan (const String& uid, float pan)
 {
-    getNodeByUid (uid).setProperty (idPan, pan, nullptr);
+    getNodeByUid (uid).setProperty (idPan, sanitise (pan, -1.0f, 1.0f, 0.0f), nullptr);
 }
 
 float GraphDocument::getPan (const String& uid) const
 {
-    return (float) getNodeByUid (uid).getProperty (idPan, 0.0f);
+    return sanitise ((float) getNodeByUid (uid).getProperty (idPan, 0.0f), -1.0f, 1.0f, 0.0f);
 }
 
 void GraphDocument::setReceivesMidi (const String& uid, bool b)
@@ -173,12 +179,12 @@ bool GraphDocument::getReceivesMidi (const String& uid) const
 
 void GraphDocument::setMix (const String& uid, float mix)
 {
-    getNodeByUid (uid).setProperty (idMix, jlimit (0.0f, 1.0f, mix), nullptr);
+    getNodeByUid (uid).setProperty (idMix, sanitise (mix, 0.0f, 1.0f, 1.0f), nullptr);
 }
 
 float GraphDocument::getMix (const String& uid) const
 {
-    return (float) getNodeByUid (uid).getProperty (idMix, 1.0f);
+    return sanitise ((float) getNodeByUid (uid).getProperty (idMix, 1.0f), 0.0f, 1.0f, 1.0f);
 }
 
 void GraphDocument::clearAllPluginStates()
@@ -234,12 +240,12 @@ void GraphDocument::removeConnectionsInvolving (const String& uid)
 void GraphDocument::setNodePosition (const String& uid, float x, float y)
 {
     ValueTree n = getNodeByUid (uid);
-    n.setProperty (idX, x, nullptr);
-    n.setProperty (idY, y, nullptr);
+    n.setProperty (idX, sanitise (x, 0.0f, 1.0f, 0.5f), nullptr);
+    n.setProperty (idY, sanitise (y, 0.0f, 1.0f, 0.5f), nullptr);
 }
 
-float GraphDocument::getNodeX (const String& uid) const { return (float) getNodeByUid (uid).getProperty (idX, 0.5f); }
-float GraphDocument::getNodeY (const String& uid) const { return (float) getNodeByUid (uid).getProperty (idY, 0.5f); }
+float GraphDocument::getNodeX (const String& uid) const { return sanitise ((float) getNodeByUid (uid).getProperty (idX, 0.5f), 0.0f, 1.0f, 0.5f); }
+float GraphDocument::getNodeY (const String& uid) const { return sanitise ((float) getNodeByUid (uid).getProperty (idY, 0.5f), 0.0f, 1.0f, 0.5f); }
 
 bool GraphDocument::hasConnection (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const
 {

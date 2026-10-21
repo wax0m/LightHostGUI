@@ -10,6 +10,7 @@
 #include "../Source/Engine/GraphDocument.h"
 #include <iostream>
 #include <cmath>
+#include <limits>
 
 using namespace juce;
 
@@ -125,6 +126,43 @@ int runStripTests (int& checks)
             check (checks, near (strip->getTap().read().peak[0], 0.5f), "in-graph strip meter tracks post-gain level");
 
         graph.clear();
+    }
+
+    // --- Sanitised persisted values + NaN-proof strip -------------------------
+    {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float inf = std::numeric_limits<float>::infinity();
+        check (checks, GraphDocument::sanitise (nan, 0.0f, 2.0f, 1.0f) == 1.0f, "sanitise: NaN -> fallback");
+        check (checks, GraphDocument::sanitise (inf, 0.0f, 2.0f, 1.0f) == 1.0f, "sanitise: Inf -> fallback");
+        check (checks, GraphDocument::sanitise (1000.0f, 0.0f, 2.0f, 1.0f) == 2.0f, "sanitise: clamps high");
+
+        GraphDocument doc;
+        const String uid = doc.getIoNodeUid (true);
+        doc.getNodeByUid (uid).setProperty ("gain", 1000.0f, nullptr);   // as a corrupt file would
+        check (checks, doc.getGain (uid) == 2.0f, "document: gain 1000 reads back as 2");
+        doc.getNodeByUid (uid).setProperty ("gain", nan, nullptr);
+        check (checks, doc.getGain (uid) == 1.0f, "document: NaN gain reads back as 1");
+        doc.getNodeByUid (uid).setProperty ("pan", -5.0f, nullptr);
+        check (checks, doc.getPan (uid) == -1.0f, "document: pan -5 reads back as -1");
+        doc.getNodeByUid (uid).setProperty ("mix", nan, nullptr);
+        check (checks, doc.getMix (uid) == 1.0f, "document: NaN mix reads back as 1");
+        doc.setGain (uid, 1000.0f);
+        check (checks, doc.getGain (uid) == 2.0f, "document: setGain clamps");
+        doc.getNodeByUid (uid).setProperty ("x", 7.0f, nullptr);
+        check (checks, doc.getNodeX (uid) == 1.0f, "document: node x clamped to 0..1");
+
+        NodeStripProcessor s;
+        s.setGain (nan);
+        check (checks, s.getGain() == 1.0f, "strip: NaN gain setter -> 1");
+        AudioBuffer<float> buf (2, 8);
+        for (int i = 0; i < 8; ++i) { buf.setSample (0, i, i % 2 ? nan : 0.5f); buf.setSample (1, i, inf); }
+        MidiBuffer midi;
+        s.processBlock (buf, midi);
+        bool finite = true;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < 8; ++i) finite = finite && std::isfinite (buf.getSample (ch, i));
+        check (checks, finite, "strip: NaN/Inf input yields finite output");
+        check (checks, near (buf.getSample (0, 0), 0.5f), "strip: finite samples are untouched");
     }
 
     std::cout << (failures == 0 ? "  strip ok" : "  strip FAILED") << std::endl;

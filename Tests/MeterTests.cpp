@@ -14,9 +14,11 @@
 #include "../Source/Engine/MeterProcessor.h"
 #include "../Source/Engine/PassThroughProcessor.h"
 #include "../Source/Engine/MonoInputProcessor.h"
+#include "../Source/Engine/OutputGuardProcessor.h"
 #include "../Source/Engine/PluginBuses.h"
 #include <iostream>
 #include <cmath>
+#include <limits>
 
 using namespace juce;
 
@@ -220,6 +222,125 @@ int runMeterTests (int& checks)
         mono.processBlock (buf, m);
         check (checks, near (buf.getSample (0, 0), 0.3f) && near (buf.getSample (1, 0), 0.3f),
                "mono: both channels become the L+R sum");
+    }
+
+    // --- 7. OutputGuardProcessor: zero-latency soft limiter + NaN scrubber --
+    {
+        constexpr double sr = 48000.0;
+        constexpr int blk = 480;
+        const float ceiling = OutputGuardProcessor::getCeiling();
+        MidiBuffer m;
+
+        const auto fillSine = [] (AudioBuffer<float>& b, float amp, int& phase)
+        {
+            for (int i = 0; i < b.getNumSamples(); ++i, ++phase)
+            {
+                const float v = amp * std::sin (MathConstants<float>::twoPi * 1000.0f * (float) phase / 48000.0f);
+                b.setSample (0, i, v);
+                b.setSample (1, i, v);
+            }
+        };
+
+        // Below the ceiling: bit-exact.
+        {
+            OutputGuardProcessor g; g.setRateAndBufferSizeDetails (sr, blk); g.prepareToPlay (sr, blk);
+            AudioBuffer<float> in (2, blk), out (2, blk);
+            int ph = 0;
+            fillSine (in, Decibels::decibelsToGain (-6.0f), ph);
+            out.makeCopyOf (in);
+            g.processBlock (out, m);
+            bool exact = true;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < blk; ++i)
+                    exact = exact && out.getSample (ch, i) == in.getSample (ch, i);
+            check (checks, exact, "guard: -6 dBFS sine passes bit-exact");
+            check (checks, ! g.consumeLimiting() && ! g.consumeNonFinite(), "guard: quiet signal sets no latch");
+        }
+
+        // +6 dBFS is held to the ceiling; gain recovers; quiet audio is bit-exact again.
+        {
+            OutputGuardProcessor g; g.setRateAndBufferSizeDetails (sr, blk); g.prepareToPlay (sr, blk);
+            AudioBuffer<float> b (2, blk);
+            int ph = 0;
+            float worst = 0.0f;
+            for (int k = 0; k < 10; ++k)
+            {
+                fillSine (b, Decibels::decibelsToGain (6.0f), ph);
+                g.processBlock (b, m);
+                worst = jmax (worst, b.getMagnitude (0, blk));
+            }
+            check (checks, worst <= ceiling + 1.0e-6f, "guard: +6 dBFS sine peaks at or below the ceiling");
+            check (checks, worst > ceiling * 0.9f, "guard: limiting is not over-aggressive");
+            check (checks, g.consumeLimiting(), "guard: limiting latch set");
+            check (checks, ! g.consumeLimiting(), "guard: limiting latch resets on read");
+
+            // 500 ms of quiet signal (50 blocks of 10 ms): the gain must be back above 0.99.
+            for (int k = 0; k < 50; ++k)
+            {
+                fillSine (b, 0.1f, ph);
+                g.processBlock (b, m);
+            }
+            AudioBuffer<float> in (2, blk);
+            fillSine (in, 0.1f, ph);
+            b.makeCopyOf (in);
+            g.processBlock (b, m);
+            check (checks, near (b.getMagnitude (0, blk), in.getMagnitude (0, blk), 0.001f),
+                   "guard: gain back above 0.99 within 500 ms");
+            for (int k = 0; k < 100; ++k)   // another second: well past the snap-to-unity point
+            {
+                fillSine (b, 0.1f, ph);
+                g.processBlock (b, m);
+            }
+            fillSine (in, 0.1f, ph);
+            b.makeCopyOf (in);
+            g.processBlock (b, m);
+            bool exact = true;
+            for (int i = 0; i < blk; ++i) exact = exact && b.getSample (0, i) == in.getSample (0, i);
+            check (checks, exact, "guard: after release the signal is bit-exact again (no stall below unity)");
+        }
+
+        // NaN / Inf burst -> zeros; the envelope is not poisoned.
+        {
+            OutputGuardProcessor g; g.setRateAndBufferSizeDetails (sr, blk); g.prepareToPlay (sr, blk);
+            AudioBuffer<float> b (2, 8);
+            const float nan = std::numeric_limits<float>::quiet_NaN();
+            const float inf = std::numeric_limits<float>::infinity();
+            const float bad[8] = { nan, inf, -inf, nan, 0.5f, nan, inf, nan };
+            for (int i = 0; i < 8; ++i) { b.setSample (0, i, bad[i]); b.setSample (1, i, bad[7 - i]); }
+            g.processBlock (b, m);
+            bool finite = true;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < 8; ++i) finite = finite && std::isfinite (b.getSample (ch, i));
+            check (checks, finite, "guard: NaN/Inf are scrubbed to finite output");
+            check (checks, b.getSample (0, 0) == 0.0f && b.getSample (0, 1) == 0.0f, "guard: non-finite samples become 0");
+            check (checks, g.consumeNonFinite() && ! g.consumeNonFinite(), "guard: non-finite latch sets and resets");
+
+            AudioBuffer<float> q (2, 16);
+            for (int i = 0; i < 16; ++i) { q.setSample (0, i, 0.5f); q.setSample (1, i, -0.25f); }
+            g.processBlock (q, m);
+            check (checks, q.getSample (0, 5) == 0.5f && q.getSample (1, 5) == -0.25f,
+                   "guard: signal after a NaN burst is unaffected");
+        }
+
+        // Linked stereo: a loud left channel also pulls the right down.
+        {
+            OutputGuardProcessor g; g.setRateAndBufferSizeDetails (sr, blk); g.prepareToPlay (sr, blk);
+            AudioBuffer<float> b (2, 64);
+            for (int i = 0; i < 64; ++i) { b.setSample (0, i, 2.0f); b.setSample (1, i, 0.5f); }
+            g.processBlock (b, m);
+            check (checks, b.getSample (1, 10) < 0.5f - 0.05f, "guard: stereo detector is linked (right is reduced too)");
+            check (checks, b.getSample (0, 10) <= ceiling + 1.0e-6f, "guard: loud left held at the ceiling");
+        }
+
+        // 3.0 is limited from the very first sample (instant attack, zero latency).
+        {
+            OutputGuardProcessor g; g.setRateAndBufferSizeDetails (sr, blk); g.prepareToPlay (sr, blk);
+            AudioBuffer<float> b (2, 4);
+            for (int i = 0; i < 4; ++i) { b.setSample (0, i, 3.0f); b.setSample (1, i, -3.0f); }
+            g.processBlock (b, m);
+            check (checks, std::abs (b.getSample (0, 0)) <= ceiling && std::abs (b.getSample (1, 0)) <= ceiling,
+                   "guard: 3.0 is limited to the ceiling from the first sample");
+        }
     }
 
     std::cout << (failures == 0 ? "  meters ok" : "  meters FAILED") << std::endl;

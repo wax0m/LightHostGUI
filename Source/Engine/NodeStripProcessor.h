@@ -14,6 +14,7 @@
 #include <JuceHeader.h>
 #include "MeterTap.h"
 #include <atomic>
+#include <cmath>
 
 class NodeStripProcessor : public juce::AudioProcessor
 {
@@ -28,8 +29,8 @@ public:
     const juce::String getName() const override { return "NodeStrip"; }
 
     // Message thread.
-    void  setGain (float g) noexcept { gain.store (g, std::memory_order_relaxed); }
-    void  setPan  (float p) noexcept { pan.store (juce::jlimit (-1.0f, 1.0f, p), std::memory_order_relaxed); }
+    void  setGain (float g) noexcept { gain.store (std::isfinite (g) ? juce::jlimit (0.0f, 2.0f, g) : 1.0f, std::memory_order_relaxed); }
+    void  setPan  (float p) noexcept { pan.store (std::isfinite (p) ? juce::jlimit (-1.0f, 1.0f, p) : 0.0f, std::memory_order_relaxed); }
     float getGain() const noexcept   { return gain.load (std::memory_order_relaxed); }
     float getPan()  const noexcept   { return pan.load (std::memory_order_relaxed); }
 
@@ -44,6 +45,17 @@ public:
         const float rGain = g * (p >= 0.0f ? 1.0f : 1.0f + p);
 
         const int n = buffer.getNumSamples();
+
+        // A misbehaving plugin can emit NaN/Inf; stop it here so downstream plugins
+        // (filters blow up on NaN) never see it.
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            float* d = buffer.getWritePointer (ch);
+            for (int i = 0; i < n; ++i)
+                if (! std::isfinite (d[i]))
+                    d[i] = 0.0f;
+        }
+
         if (buffer.getNumChannels() > 0) buffer.applyGain (0, 0, n, lGain);
         if (buffer.getNumChannels() > 1) buffer.applyGain (1, 0, n, rGain);
 

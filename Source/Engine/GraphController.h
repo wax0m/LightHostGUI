@@ -22,6 +22,7 @@
 #include "PluginBuses.h"
 #include "MonoInputProcessor.h"
 #include "MixProcessor.h"
+#include "OutputGuardProcessor.h"
 
 class GraphController
 {
@@ -186,6 +187,10 @@ private:
     // Meter plumbing (runtime only).
     void insertMasterMeters();
     MeterProcessor* spliceMeterBefore (AudioProcessorGraph::NodeID target);
+    OutputGuardProcessor* spliceGuardBefore (AudioProcessorGraph::NodeID target);
+    // Shared body: redirect every X -> target connection through a new Proc node.
+    template <typename Proc>
+    AudioProcessorGraph::Node* spliceProcBefore (AudioProcessorGraph::NodeID target);
     MeterProcessor* spliceMeterAfter  (AudioProcessorGraph::NodeID source);
 
     void insertNodeStrips();

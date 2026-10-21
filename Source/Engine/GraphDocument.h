@@ -49,6 +49,10 @@ public:
     void setBypassed (const String& uid, bool);
     bool isBypassed (const String& uid) const;
 
+    // Non-finite -> fallback, else clamped. Applied in getters AND setters so a corrupt or
+    // hand-edited settings file can't push out-of-range values into the engine.
+    static float sanitise (float v, float lo, float hi, float fallback);
+
     void  setGain (const String& uid, float);
     float getGain (const String& uid) const;   // linear, default 1.0 (0 dB)
     void  setPan  (const String& uid, float);

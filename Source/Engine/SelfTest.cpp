@@ -1589,6 +1589,57 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test R — output guard + sanitised values. Exactly one OutputGuardProcessor sits in
+    //          the live graph after load and after a rewire (rewire must sweep the old
+    //          one). A document whose node gain was corrupted to 1000 loads with the live
+    //          strip at <= 2. The publish count per gesture is Test P's job and is
+    //          unchanged: the guard is spliced inside the same single rewire publish.
+    //==========================================================================
+    std::cout << "\n[R] output guard + sanitised persisted values" << std::endl;
+    {
+        GraphFixture fx (formatManager, "outputguard");
+        GraphController& controller = *fx.controller;
+        AudioProcessorGraph& graph = fx.graph;
+
+        const auto countGuards = [&graph]
+        {
+            int n = 0;
+            for (auto* node : graph.getNodes())
+                if (dynamic_cast<OutputGuardProcessor*> (node->getProcessor()) != nullptr)
+                    ++n;
+            return n;
+        };
+
+        r.expect (countGuards() == 1, "exactly one OutputGuardProcessor after load");
+
+        const String uid = controller.addPlugin (pA);
+        r.expect (uid.isNotEmpty(), "guard-test plugin instantiated");
+        r.expect (countGuards() == 1, "exactly one OutputGuardProcessor after addPlugin");
+
+        controller.setNodeGain (uid, 0.5f);
+        r.expect (countGuards() == 1, "exactly one OutputGuardProcessor after a gain edit");
+
+        controller.setMonoInput (true);
+        controller.setMonoInput (false);
+        r.expect (countGuards() == 1, "exactly one OutputGuardProcessor after repeated rewires");
+
+        // Corrupt the persisted gain the way a hand-edited file would.
+        GraphDocument corrupt = controller.snapshotDocument();
+        corrupt.getNodeByUid (uid).setProperty ("gain", 1000.0f, nullptr);
+        controller.loadDocument (corrupt);
+
+        float liveGain = -1.0f;
+        for (auto* node : graph.getNodes())
+            if (auto* strip = dynamic_cast<NodeStripProcessor*> (node->getProcessor()))
+                liveGain = jmax (liveGain, strip->getGain());
+        r.expect (liveGain >= 0.0f && liveGain <= 2.0f, "live strip gain is clamped to <= 2 after loading gain 1000");
+        r.expect (controller.getNodeGain (uid) <= 2.0f, "controller reports the clamped gain");
+        r.expect (countGuards() == 1, "exactly one OutputGuardProcessor after loadDocument");
+
+        controller.save (*fx.settings);
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();
