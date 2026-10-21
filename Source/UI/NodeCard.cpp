@@ -29,7 +29,8 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
     // A MISSING plugin has no live instance to drive: show no knobs (just the
     // header + inert meter). Otherwise prefer the hosted plugin's own parameters
     // (Freq, Gain, Ratio, …) on the card, falling back to the host gain/pan strip
-    // when the plugin exposes none.
+    // when the plugin exposes none. Every live card also gets the dry/wet Mix knob
+    // as its last column (parallel compression, reverb blends, ...).
     if (missing)
     {
         knobA.setVisible (false);
@@ -39,6 +40,9 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
         setupPluginParamKnobs (cardParams);
     else
         setupGainPanKnobs();
+
+    if (! missing)
+        setupMixKnob();
 
     applyBypassLook();
     setSize (cardWidth, cardHeight);
@@ -68,7 +72,10 @@ void NodeCard::setupGainPanKnobs()
     };
     knobB.onValueChange = [this] (double v) { controller.setNodePan (uid, (float) v); };
     knobB.setVisible (true);
+}
 
+void NodeCard::setupMixKnob()
+{
     // Mix: dry/wet blend around the plugin. 100 % = fully wet (plugin only) is the
     // default and the plain topology; the engine builds the parallel dry branch only
     // while the knob is below 100 %.
