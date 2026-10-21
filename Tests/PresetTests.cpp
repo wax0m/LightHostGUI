@@ -4,6 +4,7 @@
 //
 
 #include "../Source/Engine/PresetStore.h"
+#include "../Source/Engine/SettingsBackup.h"
 #include <iostream>
 
 using namespace juce;
@@ -79,6 +80,25 @@ int runPresetTests (int& checks)
     store.removePreset (0);
     check (checks, store.getNumPresets() == 1 && store.getPresetName (0) == "Drum Bus",
            "removePreset drops the right one");
+
+    // --- Unreadable settings are backed up, never lost ------------------------
+    {
+        const auto dir = File::getSpecialLocation (File::tempDirectory).getChildFile ("lighthost-backup-test");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        PropertiesFile::Options o;
+        o.commonToAllUsers = false;
+        PropertiesFile props (dir.getChildFile ("test.settings"), o);
+
+        const String raw = "<GRAPH broken";
+        const auto backup = lighthost::backupUnreadable (props, "graphDocument", raw);
+        check (checks, backup.existsAsFile(), "backup: file written");
+        check (checks, backup.loadFileAsString() == raw, "backup: file holds the exact raw text");
+        check (checks, backup.getFileName().contains ("graphDocument-unreadable-"), "backup: file name carries the key");
+        check (checks, props.getValue ("graphDocument.unreadable") == raw, "backup: settings key holds the raw text");
+        check (checks, ! GraphDocument::fromXml (raw).isValid(), "backup: the sample really is unreadable");
+        dir.deleteRecursively();
+    }
 
     std::cout << (failures == 0 ? "  presets ok" : "  presets FAILED") << std::endl;
     return failures;

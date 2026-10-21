@@ -1640,6 +1640,50 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test S — unreadable saved graph is backed up, never silently overwritten.
+    //          A broken "graphDocument" must leave a backup file + settings key holding the
+    //          original text, start from a valid default document and set a warning;
+    //          a valid document must produce neither a backup nor a warning.
+    //==========================================================================
+    std::cout << "\n[S] unreadable settings are backed up" << std::endl;
+    {
+        const auto backupsFor = [] (const File& settingsFile)
+        {
+            return settingsFile.getParentDirectory().findChildFiles (File::findFiles, false,
+                settingsFile.getFileNameWithoutExtension() + ".graphDocument-unreadable-*.xml");
+        };
+
+        const String broken = "<GRAPH broken";
+        {
+            GraphFixture fx (formatManager, "unreadablesettings");
+            for (auto& f : backupsFor (fx.file)) f.deleteFile();
+
+            // Valid document first: no backup, no warning.
+            fx.controller->save (*fx.settings);
+            GraphController good (fx.graph, formatManager);
+            good.loadFrom (*fx.settings);
+            r.expect (good.getLoadWarning().isEmpty(), "valid document: no warning");
+            r.expect (backupsFor (fx.file).isEmpty(), "valid document: no backup file");
+
+            // Now corrupt it.
+            fx.settings->setValue ("graphDocument", broken);
+            GraphController bad (fx.graph, formatManager);
+            bad.loadFrom (*fx.settings);
+
+            const auto backups = backupsFor (fx.file);
+            r.expect (backups.size() == 1, "broken document: one backup file written");
+            r.expect (backups.size() == 1 && backups.getReference (0).loadFileAsString() == broken,
+                      "broken document: the backup holds the original text");
+            r.expect (fx.settings->getValue ("graphDocument.unreadable") == broken,
+                      "broken document: settings key holds the original text");
+            r.expect (bad.getLoadWarning().isNotEmpty(), "broken document: warning is set");
+            r.expect (bad.snapshotDocument().isValid(), "broken document: started from a valid default document");
+
+            for (auto& f : backups) f.deleteFile();
+        }
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();

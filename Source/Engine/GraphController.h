@@ -40,6 +40,9 @@ public:
     //==============================================================================
     void loadFrom (PropertiesFile&);   // reads "graphDocument", migrates legacy settings if absent
     void save (PropertiesFile&);       // captures live plugin states, persists XML
+    // Non-empty when the last loadFrom() found an unreadable saved graph: a copy was kept
+    // (see SettingsBackup.h) and the controller started from defaults.
+    String getLoadWarning() const { return loadWarning; }
 
     //==============================================================================
     // Serial-chain operations (tray menu)
@@ -216,6 +219,7 @@ private:
     bool monoInput = false;                             // sum input to mono, feed both channels
     MonoInputProcessor* monoNode = nullptr;             // runtime mono-collapse node (graph-owned)
     // Reentrant-rebuild coalescing — see the comment on rebuild() in the .cpp.
+    String loadWarning;
     bool rebuilding = false;
     bool rebuildPending = false;
 

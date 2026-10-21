@@ -10,6 +10,7 @@
 #include <JuceHeader.h>
 #include "IconMenu.hpp"
 #include "PluginWindow.h"
+#include "Engine/SettingsBackup.h"
 #include "UI/MainWindow.h"
 #if JUCE_WINDOWS
 #include "Windows.h"
@@ -96,6 +97,12 @@ IconMenu::IconMenu() : INDEX_PRESET (6000000)
     controller.setMonoInput (getAppProperties().getUserSettings()->getBoolValue ("monoInput", false));
     // Presets: load the store, or seed a "Default" from the just-loaded graph.
     loadPresets();
+
+    // One non-modal notice for whatever could not be read (the backups are already written).
+    const auto warning = (controller.getLoadWarning() + "\n\n" + presetsWarning).trim();
+    if (warning.isNotEmpty())
+        AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Light Host", warning);
+
     setIcon();
     setIconTooltip (JUCEApplication::getInstance()->getApplicationName());
 }
@@ -133,7 +140,20 @@ void IconMenu::shutdownCleanly()
 void IconMenu::loadPresets()
 {
     auto& settings = *getAppProperties().getUserSettings();
-    store = PresetStore::fromXml (settings.getValue ("presets"));
+    const String rawPresets = settings.getValue ("presets");
+    store = PresetStore::fromXml (rawPresets);
+
+    // An empty value is a normal first run; a non-empty one that doesn't parse would be
+    // overwritten by the re-seeded "Default" on the next save, so keep a copy first.
+    presetsWarning = {};
+    if (rawPresets.isNotEmpty() && ! store.isValid())
+    {
+        const auto backup = lighthost::backupUnreadable (settings, "presets", rawPresets);
+        presetsWarning = "Your saved presets could not be read. "
+                       + (backup != File() ? "A copy was kept at " + backup.getFullPathName() + ". "
+                                           : String ("It could not be copied either. "))
+                       + "The app started with defaults.";
+    }
 
     // Migration / first run: never leave the store empty — seed a "Default" preset
     // from the current live document so an existing chain is preserved as a scene.

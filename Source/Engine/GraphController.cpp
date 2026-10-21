@@ -1,5 +1,6 @@
 #include "GraphController.h"
 #include "../PluginWindow.h"
+#include "SettingsBackup.h"
 
 GraphController::GraphController (AudioProcessorGraph& g, AudioPluginFormatManager& fm)
     : graph (g), formatManager (fm)
@@ -11,6 +12,7 @@ void GraphController::loadFrom (PropertiesFile& settings)
 {
     const String xml = settings.getValue ("graphDocument");
     bool loaded = false;
+    loadWarning = {};
 
     if (xml.isNotEmpty())
     {
@@ -19,6 +21,15 @@ void GraphController::loadFrom (PropertiesFile& settings)
         {
             document = std::move (doc);
             loaded = true;
+        }
+        else
+        {
+            // The next save() would overwrite the unreadable value with the fallback below.
+            const auto backup = lighthost::backupUnreadable (settings, "graphDocument", xml);
+            loadWarning = "Your saved graph could not be read. "
+                        + (backup != File() ? "A copy was kept at " + backup.getFullPathName() + ". "
+                                            : String ("It could not be copied either. "))
+                        + "The app started with defaults.";
         }
     }
 

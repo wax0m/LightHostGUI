@@ -64,6 +64,7 @@ private:
     GraphController controller { graph, formatManager };
     PresetStore store;
     bool isShutDown = false;
+    String presetsWarning;   // set by loadPresets() when the saved presets were unreadable
     #if JUCE_WINDOWS
     int x, y;
     #endif
