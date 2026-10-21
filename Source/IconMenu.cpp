@@ -102,9 +102,31 @@ IconMenu::IconMenu() : INDEX_PRESET (6000000)
 
 IconMenu::~IconMenu()
 {
-    deviceManager.removeMidiInputDeviceCallback ({}, &player);
+    shutdownCleanly();
+}
+
+void IconMenu::shutdownCleanly()
+{
+    if (isShutDown)
+        return;
+    isShutDown = true;
+
+    // UI stops polling the controller before anything below is torn down.
+    stopTimer();
+    mainWindow = nullptr;
+    pluginListWindow = nullptr;
+
+    // Close editors BEFORE saving: some plugins update their state when the editor closes.
+    PluginWindow::closeAllCurrentlyOpenWindows();
+
     persistPresets();
     controller.save (*getAppProperties().getUserSettings());
+
+    // Stop the device before the graph and plugin instances are destroyed.
+    deviceManager.removeMidiInputDeviceCallback ({}, &player);
+    deviceManager.removeAudioCallback (&player);
+    player.setProcessor (nullptr);
+    deviceManager.closeAudioDevice();
 }
 
 //== Presets ===================================================================

@@ -28,6 +28,10 @@ public:
 
     const int INDEX_PRESET;
 
+    // Idempotent. Closes editors, saves, then stops the audio device so the graph and
+    // plugin instances are never destroyed while the device still calls into them.
+    void shutdownCleanly();
+
 private:
     void timerCallback() override;
     void reloadPlugins();
@@ -59,6 +63,7 @@ private:
     AudioProcessorPlayer player;
     GraphController controller { graph, formatManager };
     PresetStore store;
+    bool isShutDown = false;
     #if JUCE_WINDOWS
     int x, y;
     #endif

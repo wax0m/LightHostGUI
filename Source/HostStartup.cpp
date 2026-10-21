@@ -49,6 +49,8 @@ public:
 
     void shutdown() override
     {
+        if (mainWindow != nullptr)
+            mainWindow->shutdownCleanly();   // while the whole IconMenu is still alive
         mainWindow = nullptr;
         appProperties = nullptr;
         LookAndFeel::setDefaultLookAndFeel (nullptr);
