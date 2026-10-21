@@ -16,6 +16,8 @@
 #include "../Engine/PresetStore.h"
 #include "TitleBar.h"
 #include "CanvasView.h"
+#include "CanvasChrome.h"
+#include <optional>
 
 namespace lighthost::ui
 {
@@ -46,6 +48,7 @@ public:
 
     void refreshChain();     // rebuild cards after an external chain change
     void refreshPresets();   // re-read the preset tabs after an external change
+    void revealNode (const juce::String& uid);   // scroll so the node is on screen (e.g. after an add)
 
     // The window hides to the tray instead of closing; pause the 60 Hz UI timer
     // while hidden so a backgrounded host does no metering/param-poll work.
@@ -57,13 +60,23 @@ public:
 private:
     void timerCallback() override;
 
+    // Zoom (the canvas requests, this applies: it owns the viewport and the zoom holder).
+    void zoomBy (float factor, std::optional<juce::Point<int>> screenAnchor);
+    void setZoom (float newZoom, std::optional<juce::Point<int>> screenAnchor);
+    void zoomToFit();
+    void applyZoom (float z);           // holder transform + canvas layout + pill text
+    void layoutOverlays();
+
     GraphController& controller;
     const PresetStore& presetStore;
     Callbacks callbacks;
 
-    TitleBar       titleBar;
-    juce::Viewport viewport;
-    CanvasView     canvas;
+    TitleBar          titleBar;
+    juce::Viewport    viewport;
+    CanvasView        canvas;
+    CanvasZoomHolder  zoomHolder { canvas };   // viewed component; scales the canvas
+    FloatingAddButton addButton;                // overlays: siblings above the viewport
+    ZoomControls      zoomControls;
     int            statsTickCounter = 0;   // throttles the title-bar stats repaint
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

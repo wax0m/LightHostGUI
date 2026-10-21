@@ -20,6 +20,18 @@
 namespace lighthost::ui
 {
 
+// Middle-button gestures belong to the canvas (pan), not to the node under the mouse:
+// forwards the event to the parent and returns true. Shared by NodeCard and EndpointNode.
+inline bool forwardMiddleToParent (juce::Component& c, const juce::MouseEvent& e,
+                                   void (juce::Component::*handler) (const juce::MouseEvent&))
+{
+    if (! e.mods.isMiddleButtonDown())
+        return false;
+    if (auto* parent = c.getParentComponent())
+        (parent->*handler) (e.getEventRelativeTo (parent));
+    return true;
+}
+
 class NodeCard : public juce::Component
 {
 public:

@@ -482,11 +482,14 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     {
         const auto knownTypes = im->knownPluginList.getTypes();
         const PluginDescription plugin = knownTypes[KnownPluginList::getIndexChosenByMenu (knownTypes, id)];
-        im->controller.addPlugin (plugin);
+        const String uid = im->controller.addPlugin (plugin);
         im->controller.save (settings);
         // Reflect the chain change in the open editor window, then update the menu.
         if (im->mainWindow != nullptr)
+        {
             im->mainWindow->refreshChain();
+            im->mainWindow->revealNode (uid);
+        }
         im->startTimer (50);
     }
 }
@@ -568,10 +571,13 @@ void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
             // addPlugin appends serially on a linear chain and adds unconnected on a
             // branched graph (never linearizes parallel routing) — decided in the
             // controller so every add entry point shares the policy.
-            controller.addPlugin (types[idx]);
+            const String uid = controller.addPlugin (types[idx]);
             controller.save (*getAppProperties().getUserSettings());
             if (mainWindow != nullptr)
+            {
                 mainWindow->refreshChain();
+                mainWindow->revealNode (uid);   // the floating ADD may be far from the new node
+            }
         });
 }
 

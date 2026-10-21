@@ -22,7 +22,7 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
 
     addAndMakeVisible (knobA);
     addAndMakeVisible (knobB);
-    addChildComponent (knobC);   // host-mode Mix knob; shown by setupGainPanKnobs()
+    addChildComponent (knobC);   // dry/wet Mix knob; shown on every live card by setupMixKnob()
     addAndMakeVisible (meterL);
     addAndMakeVisible (meterR);
 
@@ -358,6 +358,10 @@ void NodeCard::paint (juce::Graphics& g)
 
 void NodeCard::mouseDown (const juce::MouseEvent& e)
 {
+    if (forwardMiddleToParent (*this, e, &juce::Component::mouseDown))
+        return;
+    if (auto* parent = getParentComponent())
+        parent->grabKeyboardFocus();   // so Delete / Ctrl +,-,0 reach the canvas after a card click
     if (bypassRect.contains (e.getPosition()))
     {
         bypassed = ! bypassed;
@@ -387,6 +391,8 @@ void NodeCard::mouseDown (const juce::MouseEvent& e)
 
 void NodeCard::mouseDrag (const juce::MouseEvent& e)
 {
+    if (forwardMiddleToParent (*this, e, &juce::Component::mouseDrag))
+        return;
     if (! nodeDragActive)
         return;
     const auto p = e.getEventRelativeTo (getParentComponent()).getPosition();
@@ -395,8 +401,10 @@ void NodeCard::mouseDrag (const juce::MouseEvent& e)
     if (onDragMove) onDragMove (uid, delta);
 }
 
-void NodeCard::mouseUp (const juce::MouseEvent&)
+void NodeCard::mouseUp (const juce::MouseEvent& e)
 {
+    if (forwardMiddleToParent (*this, e, &juce::Component::mouseUp))
+        return;
     if (nodeDragActive)
     {
         nodeDragActive = false;
