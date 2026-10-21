@@ -72,6 +72,10 @@ Tests are off by default. Enable and build the targets you want:
   build/LightHostRuntimeTests_artefacts/Release/LightHostRuntimeTests
   ```
 
+## Security
+
+Please report security problems privately, not as public issues. See [`SECURITY.md`](SECURITY.md).
+
 ## License
 
 GPL — version 2 or, at your option, any later version — inherited from upstream Light Host. Any

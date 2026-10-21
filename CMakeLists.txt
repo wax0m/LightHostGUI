@@ -28,6 +28,21 @@ FetchContent_Declare(JUCE
 )
 FetchContent_MakeAvailable(JUCE)
 
+# Supply-chain check: tag 8.0.13 must still point at the reviewed commit. A moved tag or a tampered
+# mirror stops the configure instead of silently building different code.
+set(LIGHTHOST_JUCE_COMMIT "7c9d3783b127263d72bb65fe0a7e2dc8a02a7ac2")   # JUCE 8.0.13
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${juce_SOURCE_DIR}/.git")
+    execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${juce_SOURCE_DIR}" rev-parse HEAD
+                    OUTPUT_VARIABLE LIGHTHOST_JUCE_HEAD OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE LIGHTHOST_JUCE_RC)
+    if(NOT LIGHTHOST_JUCE_RC EQUAL 0 OR NOT LIGHTHOST_JUCE_HEAD STREQUAL LIGHTHOST_JUCE_COMMIT)
+        message(FATAL_ERROR "JUCE checkout is '${LIGHTHOST_JUCE_HEAD}', expected ${LIGHTHOST_JUCE_COMMIT} (tag 8.0.13).")
+    endif()
+else()
+    message(WARNING "Cannot verify the JUCE commit (git or the .git folder is missing).")
+endif()
+
 # ---------------------------------------------------------------------------
 # App target
 # ---------------------------------------------------------------------------

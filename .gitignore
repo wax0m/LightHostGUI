@@ -13,3 +13,14 @@ CMakeSettings.json
 /docs/
 /Resources/design-reference/
 .claude/
+
+# Never commit secrets, signing material or local environment files
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.snk
+*.keystore
+CLAUDE.local.md
