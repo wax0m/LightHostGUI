@@ -98,7 +98,7 @@ target_compile_definitions(LightHost PRIVATE
     # (debug-only; no effect on Release).
     JUCE_DISABLE_AUDIOPROCESSOR_BEGIN_END_GESTURE_CHECKING=1
 
-    JUCE_DISPLAY_SPLASH_SCREEN=0    # allowed: this project is GPLv3
+    JUCE_DISPLAY_SPLASH_SCREEN=0    # JUCE 8 has no splash-screen requirement
 
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:LightHost,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LightHost,JUCE_VERSION>"

@@ -78,9 +78,17 @@ Please report security problems privately, not as public issues. See [`SECURITY.
 
 ## License
 
-GPL — version 2 or, at your option, any later version — inherited from upstream Light Host. Any
-derivative work stays under the GPL. See [`gpl.txt`](gpl.txt) and [`license`](license) for the full
-text and the original copyright.
+LightHost GUI is distributed under the **GNU AGPLv3** (see [`LICENSE`](LICENSE)), because it is built on
+JUCE 8, whose open-source licence is AGPLv3.
+
+The original Light Host code is GPL-2.0-or-later and is used here under its "or later" option. The upstream
+notice and GPLv2 text are kept for attribution: [`LICENSE-UPSTREAM`](LICENSE-UPSTREAM) and [`gpl.txt`](gpl.txt).
+
+Third-party components:
+- JUCE 8: AGPLv3
+- VST 3 SDK: MIT (bundled with JUCE 8.0.13)
+- ASIO SDK: GPLv3 option, only in builds made with `ASIO_SDK_DIR`
+- Plug icon by Bogdan Rosu (flaticon.com): CC BY 3.0
 
 ## Credits
 
