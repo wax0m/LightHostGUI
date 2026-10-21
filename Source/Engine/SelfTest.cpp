@@ -1159,6 +1159,100 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test M — per-node dry/wet mix (ported onto the batched engine 2026-10-20).
+    //          The plugin is BYPASSED, so wet == dry == the injected noise; the
+    //          node's post-mix OUT meter must read the SAME non-zero level at mix=1
+    //          (pure wet) and mix=0 (pure dry). If the dry branch were mis-wired or
+    //          silent, mix=0 would collapse to ~0 while mix=1 stayed up. The blend
+    //          MATH is proven headless in MixTests; this proves the graph wiring.
+    //          Also: crossing 100 % builds / tears down the branch with exactly one
+    //          publish each way, changes below 100 % publish nothing, the level
+    //          returns to wet, removeNode leaves no orphaned mix node, and mix
+    //          persists across save -> reload (which rebuilds the branch).
+    //==========================================================================
+    std::cout << "\n[M] per-node dry/wet mix" << std::endl;
+    {
+        const double sr        = 44100.0;
+        const int    blockSize = 512;
+        GraphFixture fx (formatManager, "mix", sr, blockSize);
+        GraphController& controller = *fx.controller;
+        AudioProcessorGraph& graph = fx.graph;
+
+        const auto countMixNodes = [] (AudioProcessorGraph& g)
+        {
+            int n = 0;
+            for (auto* node : g.getNodes())
+                if (dynamic_cast<MixProcessor*> (node->getProcessor()) != nullptr)
+                    ++n;
+            return n;
+        };
+        const auto publishesDuring = [&controller] (const std::function<void()>& gesture)
+        {
+            const int before = controller.getPublishCount();
+            gesture();
+            return controller.getPublishCount() - before;
+        };
+
+        const String uid = controller.appendToChain (pA);
+        r.expect (uid.isNotEmpty(), "mix-test plugin instantiated");
+        r.expect (std::abs (controller.getNodeMix (uid) - 1.0f) < 1.0e-6f, "default mix is fully wet");
+        r.expect (countMixNodes (graph) == 0, "a fully wet graph has no mix node (plain topology)");
+
+        controller.setBypassed (uid, true);   // wet == dry == input noise (deterministic)
+
+        Random rng (0x3d1cef);
+        AudioBuffer<float> block (2, blockSize);
+        MidiBuffer midi;
+        // Node OUT meter (post-mix), re-fetched per block: a rewire re-splices the strip.
+        const auto drive = [&] (int count)
+        {
+            return driveNoiseBlocks (graph, block, midi, rng, [&controller, &uid] { return controller.getNodeMeter (uid); }, count);
+        };
+        const auto sameLevel = [] (float a, float b) { return std::abs (a - b) < 0.15f * jmax (a, b, 1.0e-6f); };
+
+        const float wetPeak = drive (40);
+        r.expect (wetPeak > 0.0f, "node meter registers signal at mix=1 (fully wet)");
+
+        // First drop below 100 %: builds the dry branch, one publish.
+        r.expect (publishesDuring ([&] { controller.setNodeMix (uid, 0.0f); }) == 1,
+                  "first drop below 100% publishes once (branch built)");
+        r.expect (countMixNodes (graph) == 1, "mix < 1 splices exactly one mix node");
+        r.expect (std::abs (controller.getNodeMix (uid)) < 1.0e-6f, "getNodeMix reflects the fully-dry setting");
+        const float dryPeak = drive (40);
+        r.expect (dryPeak > 0.0f, "node meter still registers signal at mix=0 (dry branch carries the input)");
+        r.expect (sameLevel (dryPeak, wetPeak), "with the plugin bypassed, dry and wet blends read the same level");
+
+        // Below 100 %: live via the atomic, no topology change.
+        r.expect (publishesDuring ([&] { controller.setNodeMix (uid, 0.5f); }) == 0,
+                  "mix changes below 100% publish nothing (live atomic)");
+        r.expect (std::abs (controller.getNodeMix (uid) - 0.5f) < 1.0e-6f, "getNodeMix reflects the half setting");
+        r.expect (drive (40) > 0.0f, "node meter registers signal at mix=0.5");
+
+        // Back to 100 %: branch torn down (one publish), level returns to the wet level.
+        r.expect (publishesDuring ([&] { controller.setNodeMix (uid, 1.0f); }) == 1,
+                  "returning to 100% publishes once (branch torn down)");
+        r.expect (countMixNodes (graph) == 0, "fully wet again: no mix node left");
+        r.expect (sameLevel (drive (40), wetPeak), "level after return-to-wet matches the original wet level");
+
+        // Persistence: mix survives save() -> fresh loadFrom(), and the reload rebuilds the branch.
+        controller.setNodeMix (uid, 0.5f);
+        controller.save (*fx.settings);
+        {
+            AudioProcessorGraph g2;
+            g2.setPlayConfigDetails (2, 2, sr, blockSize);
+            g2.prepareToPlay (sr, blockSize);
+            GraphController c2 (g2, formatManager);
+            c2.loadFrom (*fx.settings);
+            r.expect (std::abs (c2.getNodeMix (uid) - 0.5f) < 1.0e-6f, "mix survives save() -> fresh loadFrom()");
+            r.expect (countMixNodes (g2) == 1, "reload with mix < 1 rebuilds the dry branch");
+        }
+
+        // Teardown mirror: deleting a node with a live branch leaves no orphaned mix node.
+        controller.removeNode (uid);
+        r.expect (countMixNodes (graph) == 0, "removeNode leaves no orphaned mix node");
+    }
+
+    //==========================================================================
     // Test N — removeNode heals around the deleted node WITHOUT rewriting the
     //          rest of the graph ("M" is reserved by the dry/wet test on the
     //          feature/dry-wet-mix branch). Build in -> P1 -> P2 -> out plus a

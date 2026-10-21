@@ -22,6 +22,7 @@ namespace
     const Identifier idGain        ("gain");
     const Identifier idPan         ("pan");
     const Identifier idMidi        ("midi");
+    const Identifier idMix         ("mix");
     const Identifier idSrcUid      ("srcUid");
     const Identifier idSrcCh       ("srcCh");
     const Identifier idDstUid      ("dstUid");
@@ -168,6 +169,16 @@ void GraphDocument::setReceivesMidi (const String& uid, bool b)
 bool GraphDocument::getReceivesMidi (const String& uid) const
 {
     return (bool) getNodeByUid (uid).getProperty (idMidi, true);
+}
+
+void GraphDocument::setMix (const String& uid, float mix)
+{
+    getNodeByUid (uid).setProperty (idMix, jlimit (0.0f, 1.0f, mix), nullptr);
+}
+
+float GraphDocument::getMix (const String& uid) const
+{
+    return (float) getNodeByUid (uid).getProperty (idMix, 1.0f);
 }
 
 void GraphDocument::clearAllPluginStates()

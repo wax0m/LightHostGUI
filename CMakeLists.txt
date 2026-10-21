@@ -139,6 +139,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/RoutingTests.cpp
         Tests/MidiTests.cpp
         Tests/PresetTests.cpp
+        Tests/MixTests.cpp
         Source/Engine/GraphDocument.cpp
     )
 

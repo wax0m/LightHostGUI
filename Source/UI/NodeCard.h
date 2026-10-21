@@ -70,6 +70,10 @@ private:
     // two curated plugin parameters — paramIndices decides (empty => host mode).
     KnobStrip knobA { "Gain", 0.0, 2.0, 1.0 };
     KnobStrip knobB { "Pan", -1.0, 1.0, 0.0 };
+    // Dry/wet blend around this node's plugin (host strip). Shown only in host
+    // mode — like Gain/Pan, the plugin's own param knobs take precedence.
+    KnobStrip knobC { "Mix", 0.0, 1.0, 1.0 };
+    juce::Rectangle<int> knobArea;   // the knob band, also used for the missing-plugin hint
     std::vector<int> paramIndices;   // knob slot -> plugin param index
     int paramPollCounter = 0;
     // Last value/text pushed into each knob slot by the poll — setters repaint, so

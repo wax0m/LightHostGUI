@@ -22,6 +22,7 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
 
     addAndMakeVisible (knobA);
     addAndMakeVisible (knobB);
+    addChildComponent (knobC);   // host-mode Mix knob; shown by setupGainPanKnobs()
     addAndMakeVisible (meterL);
     addAndMakeVisible (meterR);
 
@@ -67,6 +68,18 @@ void NodeCard::setupGainPanKnobs()
     };
     knobB.onValueChange = [this] (double v) { controller.setNodePan (uid, (float) v); };
     knobB.setVisible (true);
+
+    // Mix: dry/wet blend around the plugin. 100 % = fully wet (plugin only) is the
+    // default and the plain topology; the engine builds the parallel dry branch only
+    // while the knob is below 100 %.
+    knobC.setLabel ("Mix");
+    knobC.setRange (0.0, 1.0);
+    knobC.clearReadout();
+    knobC.setValueQuiet (controller.getNodeMix (uid));
+    knobC.setDefault (1.0);   // double-click -> fully wet
+    knobC.format = [] (double v) { return juce::String (juce::roundToInt (v * 100.0)) + "%"; };
+    knobC.onValueChange = [this] (double v) { controller.setNodeMix (uid, (float) v); };
+    knobC.setVisible (true);
 }
 
 void NodeCard::setupPluginParamKnobs (const std::vector<params::ParamInfo>& ps)
@@ -144,6 +157,7 @@ void NodeCard::applyBypassLook()
     const float a = bypassed ? 0.42f : 1.0f;
     knobA.setAlpha (a);
     knobB.setAlpha (a);
+    knobC.setAlpha (a);
     meterL.setAlpha (a);
     meterR.setAlpha (a);
 }
@@ -194,17 +208,33 @@ void NodeCard::resized()
     }
 
     r.removeFromTop (6);
-    if (! knobB.isVisible())        // single-parameter plugin: centre the lone knob
+    knobArea = r;
+
+    // Lay out whichever knobs are live: host mode shows Gain/Pan/Mix (3), a two-param
+    // plugin two, a one-param plugin one (centred), a missing plugin none.
+    juce::Array<KnobStrip*> vis;
+    for (auto* k : { &knobA, &knobB, &knobC })
+        if (k->isVisible())
+            vis.add (k);
+
+    if (vis.size() == 1)
     {
-        knobA.setBounds (r);
+        vis.getFirst()->setBounds (r);
     }
-    else
+    else if (vis.size() >= 2)
     {
-        const int kgap = 14;
-        const int kw = (r.getWidth() - kgap) / 2;
-        knobA.setBounds (r.removeFromLeft (kw));
-        r.removeFromLeft (kgap);
-        knobB.setBounds (r);
+        const int kgap = vis.size() >= 3 ? 8 : 14;   // tighter gap once a third column appears
+        const int kw = (r.getWidth() - kgap * (vis.size() - 1)) / vis.size();
+        for (int i = 0; i < vis.size(); ++i)
+        {
+            if (i == vis.size() - 1)
+                vis[i]->setBounds (r);               // last column takes the remainder
+            else
+            {
+                vis[i]->setBounds (r.removeFromLeft (kw));
+                r.removeFromLeft (kgap);
+            }
+        }
     }
 }
 
@@ -307,7 +337,7 @@ void NodeCard::paint (juce::Graphics& g)
         g.setFont (LightHostLookAndFeel::mono (9.5f));
         g.drawFittedText (retryFailed ? "Still unavailable.\nFix the cause, then\ndouble-click to retry."
                                       : "Plugin unavailable.\nAudio passes through.\nDouble-click to retry.",
-                          knobA.getBounds(), juce::Justification::centred, 4);
+                          knobArea, juce::Justification::centred, 4);
     }
 
     // Meter labels.

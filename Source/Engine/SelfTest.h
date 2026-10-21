@@ -17,7 +17,8 @@
 //    J. node canvas positions survive chain edits;
 //    K. a plugin that fails to load runs as a pass-through (chain not severed);
 //    L. mono input sums a one-sided source onto both channels;
-//    (M. reserved for the dry/wet branch)
+//    M. per-node dry/wet mix: the dry branch carries the input, crossing 100 %
+//       builds/tears it down with one publish, and mix persists;
 //    N. removeNode heals a branched graph and keeps live instances;
 //    O. stereo-pair connect primitives + non-stacking placement;
 //    P. exactly one render-sequence publish per user gesture;
