@@ -188,6 +188,28 @@ int GraphDocument::getOutputChannel (const String& uid) const
 String GraphDocument::getOutputLabel (const String& uid) const  { return getNodeByUid (uid).getProperty (idOutLabel).toString(); }
 String GraphDocument::getOutputDevice (const String& uid) const { return getNodeByUid (uid).getProperty (idOutDevice).toString(); }
 
+bool GraphDocument::removeInvalidOutputs (const String& device, int numChannels)
+{
+    bool removed = false;
+    for (const auto& uid : getOutputUids())
+    {
+        if (isMainOutput (uid))
+            continue;
+        const int ch = getOutputChannel (uid);
+        if (ch < 0)
+            continue;
+
+        const String boundTo = getOutputDevice (uid);
+        const bool onThisDevice = boundTo.isEmpty() || boundTo == device;
+        if (ch + 1 >= maxOutputChannels || (onThisDevice && ch + 1 >= numChannels))
+        {
+            removeNode (uid);   // also drops its cables
+            removed = true;
+        }
+    }
+    return removed;
+}
+
 bool GraphDocument::pinLegacyOutputs (ValueTree& graph, int outCh, const String& label, const String& device)
 {
     ValueTree nodes = graph.getChildWithName (idNodes);

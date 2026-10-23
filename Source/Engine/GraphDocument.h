@@ -112,6 +112,13 @@ public:
     // Stamp every audioOut that has no binding with (outCh, label, device) and make sure one OUT is
     // main. Idempotent: a bound OUT (also one bound to another device) is never touched. True if anything
     // changed. The tree form serves stored presets.
+    // Load-time repair: remove extra (never the main) OUT nodes with an impossible binding, cables included. A
+    // binding is impossible when the pair doesn't exist on the device it was made on (`device` / `numChannels` are
+    // the OPEN device; a binding made on another device can't be judged by them) or the channel is absurd on
+    // any device. True if something was removed.
+    bool removeInvalidOutputs (const String& device, int numChannels);
+    static constexpr int maxOutputChannels = 1024;
+
     static bool pinLegacyOutputs (ValueTree& graph, int outCh, const String& label, const String& device);
     bool pinLegacyOutputs (int outCh, const String& label, const String& device) { return pinLegacyOutputs (state, outCh, label, device); }
 

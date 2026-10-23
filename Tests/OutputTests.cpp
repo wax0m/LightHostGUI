@@ -136,6 +136,35 @@ int runOutputTests (int& checks)
                "pinning also flags the main OUT of an old document and binds every unbound OUT");
     }
 
+    // --- 2b. Load-time repair of impossible extra OUTs (B-R4) -------------------------------
+    {
+        GraphDocument doc;
+        const String main = doc.getIoNodeUid (false);
+        const String in = doc.getIoNodeUid (true);
+        PluginDescription fx; fx.name = "Fx"; fx.pluginFormatName = "VST3"; fx.numInputChannels = fx.numOutputChannels = 2;
+        const String plug = doc.addPluginNode (fx, 300.0f, 260.0f);
+
+        const String stray  = doc.addOutputNode (1684767600, "", "EVO", 100.0f, 500.0f);   // Hung's broken node
+        const String fine   = doc.addOutputNode (2, "Loop-back 1/2", "EVO", 100.0f, 700.0f);
+        const String edge   = doc.addOutputNode (3, "", "EVO", 100.0f, 900.0f);              // 4 channels: pair (3,4) doesn't exist
+        const String other  = doc.addOutputNode (6, "Out 7/8", "Other", 100.0f, 1100.0f);    // another device, sane value: can't be judged
+        const String absurd = doc.addOutputNode (5000, "", "Other", 100.0f, 1300.0f);        // absurd on any device
+        for (const auto& out : { stray, fine, edge, other, absurd })
+            for (int ch = 0; ch < 2; ++ch)
+                doc.addConnection (plug, ch, out, ch);
+        doc.setOutputBinding (main, 1684767600, "", "EVO");   // even an absurd main OUT is never removed
+        doc.addConnection (in, 0, plug, 0);
+
+        const int edgesBefore = doc.getConnections().getNumChildren();
+        check (checks, doc.removeInvalidOutputs ("EVO", 4), "repair reports a removal");
+        const auto left = doc.getOutputUids();
+        const auto has = [&left] (const String& u) { return std::find (left.begin(), left.end(), u) != left.end(); };
+        check (checks, ! has (stray) && ! has (edge) && ! has (absurd), "impossible extra OUTs are gone");
+        check (checks, has (fine) && has (other) && has (main), "a valid pair, an OUT bound to another device and the main OUT stay");
+        check (checks, doc.getConnections().getNumChildren() == edgesBefore - 6, "their cables went with them (3 OUTs x 2 channels)");
+        check (checks, ! doc.removeInvalidOutputs ("EVO", 4), "repair is idempotent");
+    }
+
     // --- 3. Chain rules with extra OUTs ----------------------------------------------------
     {
         PluginDescription synth; synth.name = "Piano"; synth.pluginFormatName = "VST3"; synth.isInstrument = true; synth.numOutputChannels = 2;

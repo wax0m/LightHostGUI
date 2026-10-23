@@ -44,7 +44,7 @@ public:
     // Non-empty when the last loadFrom() found an unreadable saved graph: a copy was kept
     // (see SettingsBackup.h) and the controller started from defaults.
     String getLoadWarning() const { return loadWarning; }
-    bool didPinOnLoad() const noexcept { return pinnedOnLoad; }   // loadFrom() bound the saved graph's unbound OUTs to the open device
+    bool didFixOnLoad() const noexcept { return fixedOnLoad; }   // loadFrom() pinned / repaired the saved graph's OUTs for the open device
     bool didMigrateOnLoad() const noexcept { return migratedOnLoad; }   // loadFrom() read a v1 (normalised) graph
 
     //==============================================================================
@@ -264,7 +264,8 @@ private:
     std::map<String, int> outputBases() const;
     void rewireIfOutputsMoved (const std::map<String, int>& before);
     void registerIoNode (const ValueTree& nodeTree);             // an audioIn/audioOut document node -> live IO node
-    bool pinnedOnLoad = false;
+    bool fixedOnLoad = false;
+    bool repairOutputs();   // drop impossible extra OUTs (see GraphDocument::removeInvalidOutputs); needs a known layout
     std::set<String> missingPlugins;   // plugin nodes running as pass-through (failed to load)
     MeterProcessor* inputMeter  = nullptr;   // owned by the graph node, not us
     MeterProcessor* outputMeter = nullptr;

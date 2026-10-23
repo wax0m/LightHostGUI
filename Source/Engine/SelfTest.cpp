@@ -743,6 +743,43 @@ int runSelfTest (const StringArray& explicitPluginPaths)
             r.expect (level (block, 0) > 0.5f && level (block, 2) < 1.0e-6f, "after removing it only the main pair plays");
         }
 
+        // --- impossible pairs are refused and repaired (B-R4) ----------------------------------
+        {
+            GraphFixture fx (formatManager, "outputsrepair", 44100.0, 512, 4);
+            GraphController& controller = *fx.controller;
+            controller.instanceFactory = factory;
+            controller.setOutputLayout (layoutOf ("EVO", "1111"));   // 4 channels: pairs 0/1 and 2/3
+            const String mainUid = controller.document.getIoNodeUid (false);
+            const String a = controller.addPlugin (fakeDescription ("SynthA", true));
+
+            const int outsBefore = (int) controller.document.getOutputUids().size();
+            const int before = controller.getPublishCount();
+            r.expect (controller.addOutput (3).isEmpty() && controller.addOutput (-2).isEmpty() && controller.addOutput (1684767600).isEmpty(),
+                      "addOutput refuses a pair that isn't on the device");
+            const String ok = controller.addOutput (2);
+            r.expect (ok.isNotEmpty(), "addOutput accepts the last pair of the device");
+            const int afterAdd = controller.getPublishCount();
+            controller.setOutputBinding (ok, 3);
+            controller.setOutputBinding (ok, 1684767600);
+            r.expect (controller.getPublishCount() == afterAdd && controller.document.getOutputChannel (ok) == 2,
+                      "setOutputBinding refuses a pair that isn't on the device");
+            r.expect ((int) controller.document.getOutputUids().size() == outsBefore + 1 && afterAdd - before == 1,
+                      "refused calls add no node and publish nothing");
+
+            // A document with a stray OUT (as in Hung's settings) is repaired when it is loaded.
+            GraphDocument broken = controller.snapshotDocument();
+            const String stray = broken.addOutputNode (1684767600, "", "EVO", 100.0f, 900.0f);
+            broken.addConnection (a, 0, stray, 0);
+            broken.addConnection (a, 1, stray, 1);
+            const int edgesWithStray = broken.getConnections().getNumChildren();
+            controller.loadDocument (broken);
+            r.expect (controller.document.getNodeByUid (stray).isValid() == false && controller.getNodeForUid (stray) == nullptr,
+                      "loadDocument removes the stray OUT");
+            r.expect (controller.document.getConnections().getNumChildren() == edgesWithStray - 2, "its cables went with it");
+            r.expect (controller.document.getNodeByUid (mainUid).isValid() && controller.getNodeForUid (mainUid) != nullptr
+                      && controller.document.getNodeByUid (ok).isValid(), "the main OUT and the valid extra OUT stay");
+        }
+
         // --- Hung's legacy setup: the original OUT on Loop-back, then Out 1/2 gets enabled ---
         {
             GraphFixture fx (formatManager, "outputslegacy", 44100.0, 512, 2);

@@ -44,9 +44,9 @@ void GraphController::loadFrom (PropertiesFile& settings)
         document = GraphDocument::migrateFromLegacySettings (settings);
     }
 
-    pinnedOnLoad = false;
+    fixedOnLoad = repairOutputs();
     if (pinTargetNow.has_value())   // a device is already open: bind the unbound OUTs before the first build
-        pinnedOnLoad = document.pinLegacyOutputs (pinTargetNow->outCh, pinTargetNow->label, pinTargetNow->device);
+        fixedOnLoad = document.pinLegacyOutputs (pinTargetNow->outCh, pinTargetNow->label, pinTargetNow->device) || fixedOnLoad;
 
     rebuild();
 }
@@ -1010,10 +1010,17 @@ bool GraphController::pinLegacyOutputs (const lighthost::outputs::PinTarget& tar
     return changed;
 }
 
+bool GraphController::repairOutputs()
+{
+    if (! outputLayout.known || outputLayout.names.isEmpty())
+        return false;
+    return document.removeInvalidOutputs (outputLayout.deviceName, outputLayout.names.size());
+}
+
 String GraphController::addOutput (int outCh)
 {
-    if (! outputLayout.known || outCh < 0)
-        return {};
+    if (! outputLayout.known || outCh < 0 || outCh + 1 >= outputLayout.names.size())
+        return {};   // the pair must exist on the open device
 
     // Below the lowest OUT already on the canvas.
     const String mainUid = document.getIoNodeUid (false);
@@ -1031,7 +1038,7 @@ String GraphController::addOutput (int outCh)
 
 void GraphController::setOutputBinding (const String& outUid, int outCh)
 {
-    if (! outputLayout.known || outCh < 0
+    if (! outputLayout.known || outCh < 0 || outCh + 1 >= outputLayout.names.size()
         || (document.getOutputChannel (outUid) == outCh && document.getOutputDevice (outUid) == outputLayout.deviceName))
         return;
     if (document.getNodeByUid (outUid).getProperty ("type").toString() != GraphDocument::typeAudioOut)
@@ -1487,6 +1494,7 @@ void GraphController::loadDocument (const GraphDocument& doc)
 {
     document.state = doc.state.createCopy();   // deep copy: never share the store's tree
     GraphDocument::migrateTree (document.state);   // safety net: a v1 tree must never reach the canvas
+    repairOutputs();
     if (pinTargetNow.has_value())
         document.pinLegacyOutputs (pinTargetNow->outCh, pinTargetNow->label, pinTargetNow->device);
     rebuild();

@@ -101,7 +101,7 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
     controller.setMonoInput (getAppProperties().getUserSettings()->getBoolValue ("monoInput", false));
     // Presets: load the store, or seed a "Default" from the just-loaded graph.
     loadPresets();
-    pinLegacyOutputs (controller.didPinOnLoad());   // stored presets (and the saved graph, if loadFrom stamped it)
+    pinLegacyOutputs (controller.didFixOnLoad());   // stored presets (and the saved graph, if loadFrom stamped it)
 
     // A v1.0 build would read a v2 graph as px values clamped to 1 (every node bottom-right), so keep the
     // v1 file once, before the first save can rewrite it. No dialog: the migration itself is lossless.
@@ -674,6 +674,7 @@ void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
     // Output > the open device's channel pairs (inactive ones marked). Ids are far above the instrument ids.
     constexpr int outputIdBase = 1000000;
     const auto layout = controller.getOutputLayout();
+    const int numPairs = layout.known ? layout.names.size() / 2 : 0;
     if (layout.known && layout.names.size() >= 2)
     {
         PopupMenu outs;
@@ -688,13 +689,18 @@ void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
 
     m.showMenuAsync (PopupMenu::Options()
                         .withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }),
-        [this, effects, instruments, outputIdBase] (int r)
+        [this, effects, instruments, outputIdBase, numPairs] (int r)
         {
             if (r <= 0)
                 return;
-            if (r >= outputIdBase)
+            const auto choice = lighthost::choice::decodeAddMenuId (r, instruments.size(), outputIdBase, numPairs, effects);
+            if (choice.kind == lighthost::choice::AddMenuChoice::Kind::none)
+                return;
+            if (choice.kind == lighthost::choice::AddMenuChoice::Kind::output)
             {
-                const String uid = controller.addOutput (2 * (r - outputIdBase));
+                const String uid = controller.addOutput (2 * choice.index);
+                if (uid.isEmpty())
+                    return;
                 controller.save (*getAppProperties().getUserSettings());
                 if (mainWindow != nullptr)
                 {
@@ -703,16 +709,9 @@ void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
                 }
                 return;
             }
-            const PluginDescription* picked = nullptr;
-            if (r <= instruments.size())
-                picked = &instruments.getReference (r - 1);
-            else if (const int idx = KnownPluginList::getIndexChosenByMenu (effects, r); idx >= 0)
-                picked = &effects.getReference (idx);
-            if (picked == nullptr)
-                return;
-            // addPlugin appends serially on a linear chain and adds unconnected on a
-            // branched graph (never linearizes parallel routing) — decided in the
-            // controller so every add entry point shares the policy.
+            const PluginDescription* picked = choice.kind == lighthost::choice::AddMenuChoice::Kind::instrument
+                                                  ? &instruments.getReference (choice.index)
+                                                  : &effects.getReference (choice.index);
             const String uid = controller.addPlugin (*picked);
             controller.save (*getAppProperties().getUserSettings());
             if (mainWindow != nullptr)

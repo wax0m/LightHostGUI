@@ -231,6 +231,62 @@ int runVst2StateTests (int& checks)
         check (checks, loud.size() == 1 && loadable[loud[0]].name == "LoudMax", "LoudMax64 suggests LoudMax");
     }
 
+    // --- 6. ADD menu decoding: exact id ranges (B-R4) --------------------------------
+    {
+        Array<PluginDescription> effects;
+        for (int i = 0; i < 6; ++i)
+        {
+            PluginDescription d;
+            d.name = "Fx" + String (i); d.manufacturerName = "Maker" + String (i % 2); d.pluginFormatName = "VST3";
+            d.fileOrIdentifier = "C:/vst3/Fx" + String (i) + ".vst3"; d.uniqueId = 100 + i;
+            effects.add (d);
+        }
+
+        using Kind = lighthost::choice::AddMenuChoice::Kind;
+        const auto decode = [&effects] (int id) { return lighthost::choice::decodeAddMenuId (id, 3, 1000000, 4, effects); };
+
+        check (checks, decode (1).kind == Kind::instrument && decode (1).index == 0 && decode (3).kind == Kind::instrument && decode (3).index == 2,
+               "decode: ids 1..N are instruments");
+        check (checks, decode (4).kind == Kind::none && decode (0).kind == Kind::none && decode (-1).kind == Kind::none,
+               "decode: ids outside every range are nothing");
+        check (checks, decode (1000000).kind == Kind::output && decode (1000000).index == 0
+                          && decode (1000003).kind == Kind::output && decode (1000003).index == 3,
+               "decode: the first and last output pair");
+        check (checks, decode (1000004).kind == Kind::none && decode (999999).kind == Kind::none, "decode: just outside the output range is nothing");
+
+        // The failing case: a real KnownPluginList id is far above 1 000 000 and must stay an effect.
+        constexpr int menuIdBase = 0x324503f4;
+        const auto four = decode (menuIdBase + 4);
+        check (checks, four.kind == Kind::effect && four.index == 4, "decode: menuIdBase + 4 is effect 4, not an output (B-R4)");
+
+        // Every id of a really built menu (submenus included) decodes to its own effect.
+        PopupMenu menu;
+        KnownPluginList::addToMenu (menu, effects, KnownPluginList::sortByManufacturer);
+        std::vector<int> ids;
+        std::function<void (PopupMenu&)> walk = [&] (PopupMenu& m)
+        {
+            PopupMenu::MenuItemIterator it (m);
+            while (it.next())
+            {
+                if (it.getItem().subMenu != nullptr)
+                    walk (*it.getItem().subMenu);
+                else if (it.getItem().itemID != 0)
+                    ids.push_back (it.getItem().itemID);
+            }
+        };
+        walk (menu);
+        bool allEffects = ! ids.empty();
+        std::set<int> seen;
+        for (int id : ids)
+        {
+            const auto c = decode (id);
+            allEffects = allEffects && c.kind == Kind::effect && c.index == KnownPluginList::getIndexChosenByMenu (effects, id);
+            seen.insert (c.index);
+        }
+        check (checks, allEffects && (int) ids.size() == effects.size() && (int) seen.size() == effects.size(),
+               "decode: every id of a real plugin menu decodes to its own effect");
+    }
+
     std::cout << "  VST2 state: " << (failures == 0 ? "ok" : "FAILURES") << std::endl;
     return failures;
 }
