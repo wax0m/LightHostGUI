@@ -27,6 +27,12 @@ professional pro-audio aesthetic (in the lineage of Ableton Live, Bitwig, and Se
 - **Low latency** — WASAPI exclusive mode by default; ASIO available when built with an ASIO SDK
   (see below).
 
+## Download
+
+Windows (x64) builds are published as a zip on the GitHub Releases page, with its SHA-256 checksum next to it
+(`LightHost-GUI-<version>-win-x64.zip.sha256`). The build is not code-signed. For other platforms, build from source.
+See [CHANGELOG.md](CHANGELOG.md) for what changed.
+
 ## Build
 
 The first CMake configure downloads JUCE (pinned to 8.0.13) and needs network access.
@@ -36,7 +42,7 @@ The first CMake configure downloads JUCE (pinned to 8.0.13) and needs network ac
 cmake -B build
 cmake --build build --config Release
 ```
-Binary: `build/LightHost_artefacts/Release/Light Host.exe`
+Binary: `build/LightHost_artefacts/Release/LightHost GUI.exe`
 
 **macOS**:
 ```
