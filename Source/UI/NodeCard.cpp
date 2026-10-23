@@ -192,7 +192,10 @@ void NodeCard::updateNameTooltip()
     const int switchesLeft = showMidi ? midiRect.getX() : bypassRect.getX();
     const float titleWidth = (float) (switchesLeft - statusDotRect.getRight() - 14);
     const bool cut = juce::GlyphArrangement::getStringWidth (LightHostLookAndFeel::display (13.5f, true), name) > titleWidth;
-    setTooltip (cut ? name : juce::String());
+    if (missing)
+        setTooltip (name + "\nUnavailable: double-click to retry, right-click to replace it with another plugin.");
+    else
+        setTooltip (cut ? name : juce::String());
 }
 
 void NodeCard::resized()
@@ -373,6 +376,11 @@ void NodeCard::mouseDown (const juce::MouseEvent& e)
         return;
     if (auto* parent = getParentComponent())
         parent->grabKeyboardFocus();   // so Delete / Ctrl +,-,0 reach the canvas after a card click
+    if (e.mods.isPopupMenu())
+    {
+        if (onContextMenu) onContextMenu (uid);
+        return;
+    }
     if (bypassRect.contains (e.getPosition()))
     {
         bypassed = ! bypassed;

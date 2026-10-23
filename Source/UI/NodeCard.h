@@ -52,6 +52,8 @@ public:
     // Double-click on a MISSING card (no editor to open) asks the canvas to retry
     // loading the plugin. On failure the canvas calls markRetryFailed().
     std::function<void (const juce::String&)> onRetry;
+    // Right-click on the card: the canvas shows the card menu (Replace with…, Open editor, Remove).
+    std::function<void (const juce::String&)> onContextMenu;
     void markRetryFailed();
 
     // Canvas-supplied node move: dragging the card BODY (not a knob or a header

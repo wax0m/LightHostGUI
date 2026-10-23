@@ -69,6 +69,10 @@ private:
     int x, y;
     #endif
 
+    // Known plugins this build can actually load (the stored list also holds old VST2 scan entries).
+    juce::Array<PluginDescription> loadablePlugins() const;
+    void showReplacePluginMenu (const String& uid, juce::Point<int> screenPos);
+
     class PluginListWindow;
     std::unique_ptr<PluginListWindow> pluginListWindow;
     std::unique_ptr<lighthost::ui::MainWindow> mainWindow;

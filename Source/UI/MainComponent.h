@@ -30,6 +30,7 @@ public:
     {
         std::function<void (juce::Point<int> screenPos)> addPlugin;
         std::function<void (const juce::String& uid)>    openEditor;
+        std::function<void (const juce::String& uid, juce::Point<int> screenPos)> replacePlugin;   // card menu
         std::function<void()>                            preferences;
         std::function<void()>                            editPlugins;
         // Presets (routed to IconMenu, which owns the store + does save/load).
@@ -49,6 +50,7 @@ public:
     void refreshChain();     // rebuild cards after an external chain change
     void refreshPresets();   // re-read the preset tabs after an external change
     void revealNode (const juce::String& uid);   // scroll so the node is on screen (e.g. after an add)
+    void showNotice (const juce::String& message);   // short result line; hides itself after a few seconds
 
     // The window hides to the tray instead of closing; pause the 60 Hz UI timer
     // while hidden so a backgrounded host does no metering/param-poll work.
@@ -78,6 +80,7 @@ private:
     CanvasZoomHolder  zoomHolder { canvas };   // viewed component; scales the canvas
     FloatingAddButton addButton;                // overlays: siblings above the viewport
     ZoomControls      zoomControls;
+    NoticeLabel       notice;
     int            statsTickCounter = 0;   // throttles the title-bar stats repaint
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

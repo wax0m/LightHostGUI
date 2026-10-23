@@ -25,6 +25,7 @@ MainComponent::MainComponent (GraphController& controllerToPoll, const PresetSto
     titleBar.refreshPresets();
 
     canvas.onOpenEditor = [this] (const juce::String& uid) { if (callbacks.openEditor) callbacks.openEditor (uid); };
+    canvas.onReplace    = [this] (const juce::String& uid, juce::Point<int> p) { if (callbacks.replacePlugin) callbacks.replacePlugin (uid, p); };
     canvas.onZoomBy     = [this] (float f, std::optional<juce::Point<int>> a) { zoomBy (f, a); };
     canvas.onZoomReset  = [this] { setZoom (1.0f, std::nullopt); };
     canvas.onZoomFit    = [this] { zoomToFit(); };
@@ -46,6 +47,7 @@ MainComponent::MainComponent (GraphController& controllerToPoll, const PresetSto
     zoomControls.onReset   = [this] { setZoom (1.0f, std::nullopt); };
     zoomControls.onFit     = [this] { zoomToFit(); };
     addAndMakeVisible (zoomControls);
+    addChildComponent (notice);   // hidden until a result is shown
 
     setSize (1200, 720);
     startTimerHz (60);
@@ -79,6 +81,13 @@ void MainComponent::revealNode (const juce::String& uid)
 
     viewport.setViewPosition (scaled.getCentreX() - viewArea.getWidth()  / 2,
                               scaled.getCentreY() - viewArea.getHeight() / 2);
+}
+
+void MainComponent::showNotice (const juce::String& message)
+{
+    layoutOverlays();
+    notice.show (message);
+    notice.toFront (false);
 }
 
 //== Zoom ======================================================================
@@ -137,6 +146,8 @@ void MainComponent::layoutOverlays()
     zoomControls.setBounds (vp.getRight()  - bar - 14 - ZoomControls::preferredWidth,
                             vp.getBottom() - bar - 14 - ZoomControls::preferredHeight,
                             ZoomControls::preferredWidth, ZoomControls::preferredHeight);
+    const int noticeW = juce::jmin (NoticeLabel::maxWidth, vp.getWidth() - 32);
+    notice.setBounds (vp.getCentreX() - noticeW / 2, vp.getBottom() - bar - 14 - NoticeLabel::height, noticeW, NoticeLabel::height);
 }
 
 void MainComponent::paint (juce::Graphics& g)

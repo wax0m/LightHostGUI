@@ -66,6 +66,7 @@ public:
 
     // Supplied by the host (MainComponent / IconMenu).
     std::function<void (const juce::String& uid)> onOpenEditor;
+    std::function<void (const juce::String& uid, juce::Point<int> screenPos)> onReplace;   // card menu: Replace with…
     // factor > 1 zooms in. screenAnchor = the point to keep fixed (nullopt = view centre).
     std::function<void (float factor, std::optional<juce::Point<int>> screenAnchor)> onZoomBy;
     std::function<void()> onZoomReset;
@@ -133,6 +134,7 @@ private:
     std::optional<juce::Point<float>> deleteBadgeCentre() const;
     void deleteSelectedCable();
     void showCableMenu (const Cable&);
+    void showCardMenu (const juce::String& uid);
 
     juce::Viewport* findViewport() const { return findParentComponentOfClass<juce::Viewport>(); }
 

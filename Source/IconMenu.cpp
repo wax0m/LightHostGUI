@@ -12,6 +12,7 @@
 #include "PluginWindow.h"
 #include "Engine/SettingsBackup.h"
 #include "UI/MainWindow.h"
+#include "Engine/PluginChoice.h"
 #if JUCE_WINDOWS
 #include "Windows.h"
 #endif
@@ -419,7 +420,7 @@ void IconMenu::timerCallback()
         menu.addSectionHeader ("Available Plugins");
         // All plugins. addPlugin appends serially on a linear chain and adds unconnected
         // on a branched graph, so adding is never gated.
-        KnownPluginList::addToMenu (menu, knownPluginList.getTypes(), pluginSortMethod);
+        KnownPluginList::addToMenu (menu, loadablePlugins(), pluginSortMethod);
     }
     else
     {
@@ -525,9 +526,10 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
         return im->switchToPreset (id - im->INDEX_PRESET);
     // Add plugin (appends while linear, adds unconnected on a branched graph). The
     // per-plugin items (Edit/Bypass/Move/Delete) are action lambdas, not ids.
-    if (id > 2 && KnownPluginList::getIndexChosenByMenu (im->knownPluginList.getTypes(), id) > -1)
+    const auto loadable = im->loadablePlugins();
+    if (id > 2 && KnownPluginList::getIndexChosenByMenu (loadable, id) > -1)
     {
-        const auto knownTypes = im->knownPluginList.getTypes();
+        const auto knownTypes = loadable;
         const PluginDescription plugin = knownTypes[KnownPluginList::getIndexChosenByMenu (knownTypes, id)];
         const String uid = im->controller.addPlugin (plugin);
         im->controller.save (settings);
@@ -577,6 +579,7 @@ void IconMenu::showMainWindow()
         lighthost::ui::MainComponent::Callbacks cb;
         cb.addPlugin    = [this] (juce::Point<int> p) { showAddPluginMenu (p); };
         cb.openEditor   = [this] (const String& uid)  { openEditorForUid (uid); };
+        cb.replacePlugin = [this] (const String& uid, juce::Point<int> p) { showReplacePluginMenu (uid, p); };
         cb.preferences  = [this] { showAudioSettings(); };
         cb.editPlugins  = [this] { reloadPlugins(); };
         cb.selectPreset = [this] (int i) { switchToPreset (i); };
@@ -602,16 +605,16 @@ void IconMenu::showMainWindow()
 
 void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
 {
+    const auto types = loadablePlugins();
     PopupMenu m;
-    KnownPluginList::addToMenu (m, knownPluginList.getTypes(), pluginSortMethod);
+    KnownPluginList::addToMenu (m, types, pluginSortMethod);
 
     m.showMenuAsync (PopupMenu::Options()
                         .withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }),
-        [this] (int r)
+        [this, types] (int r)
         {
             if (r <= 0)
                 return;
-            const auto types = knownPluginList.getTypes();
             const int idx = KnownPluginList::getIndexChosenByMenu (types, r);
             if (idx < 0)
                 return;
@@ -624,6 +627,67 @@ void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
             {
                 mainWindow->refreshChain();
                 mainWindow->revealNode (uid);   // the floating ADD may be far from the new node
+            }
+        });
+}
+
+juce::Array<PluginDescription> IconMenu::loadablePlugins() const
+{
+    StringArray formats;
+    for (int i = 0; i < formatManager.getNumFormats(); ++i)
+        formats.add (formatManager.getFormat (i)->getName());
+    return lighthost::choice::filterLoadable (knownPluginList.getTypes(), formats);
+}
+
+// Card menu -> Replace with…: loadable plugins only, the likely successors on top. Non-modal
+// (async popup), so it never re-enters the message loop in the middle of an edit.
+void IconMenu::showReplacePluginMenu (const String& uid, juce::Point<int> screenPos)
+{
+    const auto oldDesc = GraphDocument::getPluginDescription (controller.document.getNodeByUid (uid));
+    if (! oldDesc.has_value())
+        return;
+
+    const auto types = loadablePlugins();
+    const auto suggested = lighthost::choice::suggestReplacements (*oldDesc, types);
+
+    PopupMenu m;
+    if (! suggested.empty())
+    {
+        m.addSectionHeader ("Suggested");
+        for (size_t i = 0; i < suggested.size(); ++i)
+            m.addItem ((int) i + 1, types.getReference (suggested[i]).name + "  (" + types.getReference (suggested[i]).pluginFormatName + ")");
+        m.addSeparator();
+        m.addSectionHeader ("All plugins");
+    }
+    KnownPluginList::addToMenu (m, types, pluginSortMethod);
+
+    m.showMenuAsync (PopupMenu::Options().withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }),
+        [this, uid, types, suggested, oldDesc = *oldDesc] (int r)
+        {
+            if (r <= 0)
+                return;
+
+            int idx = -1;
+            if (r <= (int) suggested.size())
+                idx = suggested[(size_t) r - 1];
+            else
+                idx = KnownPluginList::getIndexChosenByMenu (types, r);
+            if (idx < 0)
+                return;
+
+            // A node re-added from a stale VST2 entry has no state; the original may still sit in the legacy key.
+            auto& settings = *getAppProperties().getUserSettings();
+            MemoryBlock legacy;
+            legacy.fromBase64Encoding (settings.getValue (GraphDocument::legacyKey ("state", oldDesc)));
+
+            const auto result = controller.replacePlugin (uid, types[idx], legacy.isEmpty() ? nullptr : &legacy);
+            if (result.ok)
+                controller.save (settings);
+            if (mainWindow != nullptr)
+            {
+                if (result.ok)
+                    mainWindow->refreshChain();
+                mainWindow->showNotice (result.message);
             }
         });
 }

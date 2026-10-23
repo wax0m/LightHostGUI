@@ -144,6 +144,7 @@ void CanvasView::rebuildViews()
                     safe->refresh (true);              // keep the view where it is: no jump after a delete
                 });
             };
+            card->onContextMenu = [this] (const juce::String& u) { showCardMenu (u); };
             card->onRetry = [this] (const juce::String& u)
             {
                 // Deferred like onRemove: a successful retry refresh()es, which would
@@ -429,6 +430,45 @@ void CanvasView::showCableMenu (const Cable& cable)
                 return;
             safe->selection = key;
             safe->deleteSelectedCable();
+        });
+}
+
+// Right-click menu of a plugin card. Async like the cable menu (no nested message loop), and the
+// result is applied through a SafePointer: the canvas may be gone by the time the user picks.
+void CanvasView::showCardMenu (const juce::String& uid)
+{
+    const bool unavailable = controller.isNodeUnavailable (uid);
+    const auto where = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
+
+    juce::PopupMenu m;
+    if (unavailable)
+    {
+        m.addItem (1, "Replace with...");
+        m.addItem (2, "Open editor", false);
+    }
+    else
+    {
+        m.addItem (2, "Open editor");
+        m.addItem (1, "Replace with...");
+    }
+    m.addSeparator();
+    m.addItem (3, "Remove");
+
+    auto* self = this;   // MSVC rejects `this` inside the nested init-capture
+    m.showMenuAsync (juce::PopupMenu::Options(),
+        [safe = juce::Component::SafePointer<CanvasView> (self), uid, where] (int r)
+        {
+            if (safe == nullptr || r == 0)
+                return;
+            if (r == 1 && safe->onReplace)
+                safe->onReplace (uid, where);
+            else if (r == 2 && safe->onOpenEditor)
+                safe->onOpenEditor (uid);
+            else if (r == 3)
+            {
+                safe->controller.removeNode (uid);   // heals around the node; branches survive
+                safe->refresh (true);                // keep the view where it is
+            }
         });
 }
 

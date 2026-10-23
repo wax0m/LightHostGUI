@@ -5,6 +5,7 @@
 //
 
 #include "../Source/Engine/Vst2State.h"
+#include "../Source/Engine/PluginChoice.h"
 #include <iostream>
 
 using namespace juce;
@@ -195,6 +196,39 @@ int runVst2StateTests (int& checks)
         check (checks, normaliseName ("TAL-Dub-3") == normaliseName ("TAL Dub 3"), "punctuation ignored");
         check (checks, normaliseName ("Triple EQ 4") != normaliseName ("Triple EQ 3"), "different plugins stay different");
         check (checks, normaliseName ("") == "", "empty name stays empty");
+    }
+
+    // --- 5. Menu helpers: unloadable formats hidden, replacements suggested ----------
+    {
+        const auto make = [] (const String& name, const String& maker, const String& format, const String& file)
+        {
+            PluginDescription d;
+            d.name = name; d.manufacturerName = maker; d.pluginFormatName = format; d.fileOrIdentifier = file;
+            return d;
+        };
+
+        Array<PluginDescription> known;
+        known.add (make ("Graillon 2-64", "Auburn Sounds", "VST", "C:/old/Graillon.dll"));       // 0 stale VST2
+        known.add (make ("Graillon 2", "Auburn Sounds", "VST3", "C:/vst3/Graillon 2.vst3"));    // 1
+        known.add (make ("Bitcrush", "Auburn Sounds", "VST3", "C:/vst3/Bitcrush.vst3"));        // 2 same maker
+        known.add (make ("LoudMax", "Thomas Mundt", "VST3", "C:/vst3/LoudMax.vst3"));           // 3
+        known.add (make ("Other", "Someone", "VST3", "C:/vst3/Other.vst3"));                    // 4
+
+        const auto loadable = lighthost::choice::filterLoadable (known, StringArray { "VST3" });
+        check (checks, loadable.size() == 4, "filterLoadable drops entries whose format isn't registered");
+        check (checks, lighthost::choice::filterLoadable (known, StringArray { "VST3", "VST" }).size() == 5,
+               "filterLoadable keeps a format once it is registered");
+        check (checks, known.size() == 5, "filterLoadable leaves the stored list alone");
+
+        const auto sug = lighthost::choice::suggestReplacements (known[0], loadable);
+        check (checks, sug.size() == 2 && loadable[sug[0]].name == "Graillon 2" && loadable[sug[1]].name == "Bitcrush",
+               "suggestions: same normalised name first, same manufacturer after");
+
+        const auto none = lighthost::choice::suggestReplacements (make ("Unknown", "Nobody", "VST", "x.dll"), loadable);
+        check (checks, none.empty(), "no suggestion for an unrelated plugin");
+
+        const auto loud = lighthost::choice::suggestReplacements (make ("LoudMax64", "Thomas Mundt", "VST", "LoudMax64.dll"), loadable);
+        check (checks, loud.size() == 1 && loadable[loud[0]].name == "LoudMax", "LoudMax64 suggests LoudMax");
     }
 
     std::cout << "  VST2 state: " << (failures == 0 ? "ok" : "FAILURES") << std::endl;
