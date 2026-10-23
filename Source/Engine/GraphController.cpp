@@ -60,6 +60,7 @@ std::vector<String> GraphController::getChainUids() const
     std::vector<String> chain;
     const String inUid  = document.getIoNodeUid (true);
     const String outUid = document.getIoNodeUid (false);
+    const std::set<String> side = document.getSideNodes();   // instruments beside the chain
 
     chain.push_back (inUid);
 
@@ -93,7 +94,8 @@ std::vector<String> GraphController::getChainUids() const
     int numPluginNodes = 0;
     ValueTree nodes = document.getNodes();
     for (int i = 0; i < nodes.getNumChildren(); ++i)
-        if (nodes.getChild (i).getProperty ("type").toString() == GraphDocument::typePlugin)
+        if (nodes.getChild (i).getProperty ("type").toString() == GraphDocument::typePlugin
+            && side.count (nodes.getChild (i).getProperty ("uid").toString()) == 0)
             ++numPluginNodes;
 
     if (chain.back() != outUid || (int) chain.size() != numPluginNodes + 2)
@@ -103,7 +105,8 @@ std::vector<String> GraphController::getChainUids() const
         for (int i = 0; i < nodes.getNumChildren(); ++i)
         {
             ValueTree node = nodes.getChild (i);
-            if (node.getProperty ("type").toString() == GraphDocument::typePlugin)
+            if (node.getProperty ("type").toString() == GraphDocument::typePlugin
+                && side.count (node.getProperty ("uid").toString()) == 0)
                 chain.push_back (node.getProperty ("uid").toString());
         }
         chain.push_back (outUid);
@@ -114,12 +117,21 @@ std::vector<String> GraphController::getChainUids() const
 
 void GraphController::rewriteChainConnections (const std::vector<String>& chainUids)
 {
+    // Edges of instruments beside the chain (source -> OUT) are not chain edges: keep them.
+    const std::set<String> side = document.getSideNodes();
+    std::vector<Connection> kept;
+    for (const auto& c : getConnections())
+        if (side.count (c.srcUid) > 0)
+            kept.push_back (c);
+
     document.clearConnections();
     for (size_t i = 0; i + 1 < chainUids.size(); ++i)
     {
         document.addConnection (chainUids[i], 0, chainUids[i + 1], 0);
         document.addConnection (chainUids[i], 1, chainUids[i + 1], 1);
     }
+    for (const auto& c : kept)
+        document.addConnection (c.srcUid, c.srcCh, c.dstUid, c.dstCh);
     // NOTE: node canvas positions are user-owned (dragged on the canvas, persisted
     // per node). Do NOT rewrite them here — chain edits (add/remove/move) must
     // leave every existing node exactly where the user put it.
@@ -231,22 +243,31 @@ void GraphController::rebuildNow()
         }
     }
 
-    ValueTree connections = document.getConnections();
-    for (int i = 0; i < connections.getNumChildren(); ++i)
-    {
-        ValueTree c = connections.getChild (i);
-        const auto src = uidToNodeId.find (c.getProperty ("srcUid").toString());
-        const auto dst = uidToNodeId.find (c.getProperty ("dstUid").toString());
-        if (src != uidToNodeId.end() && dst != uidToNodeId.end())
-            connectBatched ({ { src->second, (int) c.getProperty ("srcCh") },
-                                   { dst->second, (int) c.getProperty ("dstCh") } });
-    }
+    connectDocumentEdges();
 
     insertNodeStrips();
     insertMasterMeters();
     insertInputConditioner();
     insertMidiRouting();
     publishTopology();
+}
+
+// Wire every document connection between live nodes. (An edge from the second channel of a
+// mono synth is illegal here and skipped; spliceStripAfter re-creates it from the strip.)
+void GraphController::connectDocumentEdges()
+{
+    ValueTree connections = document.getConnections();
+    for (int i = 0; i < connections.getNumChildren(); ++i)
+    {
+        ValueTree c = connections.getChild (i);
+        const auto src = uidToNodeId.find (c.getProperty ("srcUid").toString());
+        const auto dst = uidToNodeId.find (c.getProperty ("dstUid").toString());
+        if (src == uidToNodeId.end() || dst == uidToNodeId.end())
+            continue;
+
+        connectBatched ({ { src->second, (int) c.getProperty ("srcCh") },
+                          { dst->second, (int) c.getProperty ("dstCh") } });
+    }
 }
 
 // Instantiate one plugin document node into the live graph. On load failure the
@@ -263,9 +284,15 @@ AudioProcessorGraph::Node* GraphController::addPluginNodeToGraph (const ValueTre
 // a channel in the stereo chain. Touches nothing but the new instance.
 std::unique_ptr<AudioProcessor> GraphController::createInstanceFrom (const PluginDescription& desc)
 {
-    String errorMessage;
-    auto created = formatManager.createPluginInstance (desc, graph.getSampleRate(),
-                                                       graph.getBlockSize(), errorMessage);
+    std::unique_ptr<AudioProcessor> created;
+    if (instanceFactory)
+        created = instanceFactory (desc);
+    else
+    {
+        String errorMessage;
+        created = formatManager.createPluginInstance (desc, graph.getSampleRate(),
+                                                      graph.getBlockSize(), errorMessage);
+    }
     if (created == nullptr)
         return nullptr;
 
@@ -512,6 +539,12 @@ GraphController::ReplaceResult GraphController::replacePlugin (const String& uid
         return result;
     }
 
+    // An instrument has no input: edges that fed the old plugin can't survive the swap.
+    if (GraphDocument::isSourceDescription (newDesc))
+        for (const auto& c : getConnections())
+            if (c.dstUid == uid)
+                document.removeConnection (c.srcUid, c.srcCh, c.dstUid, c.dstCh);
+
     // Same swap as the missing-plugin recovery; removal also closes the node's editor window.
     removePluginNodeFromGraph (uid);
     const bool registered = registerPluginNode (nodeTree, std::move (instance)) != nullptr;
@@ -564,15 +597,43 @@ std::vector<GraphController::ChainItem> GraphController::getChain() const
 // it is in the way. Positions are GUI-only, so this publishes nothing.
 String GraphController::addPluginNodeAtNextSlot (const PluginDescription& desc)
 {
-    const auto placement = lighthost::placeNewPlugin (document);
-    const String uid = document.addPluginNode (desc, placement.centre.x, placement.centre.y);
-    if (placement.moveOutTo.has_value())
-        document.setNodePosition (document.getIoNodeUid (false), placement.moveOutTo->x, placement.moveOutTo->y);
+    const bool source = GraphDocument::isSourceDescription (desc);
+
+    String uid;
+    if (source)
+    {
+        const auto at = lighthost::placeNewSource (document);
+        uid = document.addPluginNode (desc, at.x, at.y);
+    }
+    else
+    {
+        const auto placement = lighthost::placeNewPlugin (document);
+        uid = document.addPluginNode (desc, placement.centre.x, placement.centre.y);
+        if (placement.moveOutTo.has_value())
+            document.setNodePosition (document.getIoNodeUid (false), placement.moveOutTo->x, placement.moveOutTo->y);
+    }
+
+    document.setReceivesMidi (uid, source);
     return uid;
+}
+
+String GraphController::addSourcePlugin (const PluginDescription& desc)
+{
+    const String uid = addPluginNodeAtNextSlot (desc);
+    const String out = document.getIoNodeUid (false);
+    document.addConnection (uid, 0, out, 0);
+    document.addConnection (uid, 1, out, 1);
+
+    addPluginNodeToGraph (document.getNodeByUid (uid));
+    rewireConnections();   // the one publish for this gesture
+    return uidToNodeId.count (uid) > 0 ? uid : String();
 }
 
 String GraphController::addPlugin (const PluginDescription& desc)
 {
+    if (GraphDocument::isSourceDescription (desc))
+        return addSourcePlugin (desc);
+
     // Serial append rewrites ALL connections as a chain, which would destroy
     // parallel routing — on a branched graph the node is added unconnected instead.
     return isLinearChain() ? appendToChain (desc) : addNodeUnconnected (desc);
@@ -580,6 +641,9 @@ String GraphController::addPlugin (const PluginDescription& desc)
 
 String GraphController::appendToChain (const PluginDescription& desc)
 {
+    if (GraphDocument::isSourceDescription (desc))
+        return addSourcePlugin (desc);   // an instrument has no place in a serial effect chain
+
     std::vector<String> chain = getChainUids();
 
     const String uid = addPluginNodeAtNextSlot (desc);
@@ -595,6 +659,9 @@ String GraphController::appendToChain (const PluginDescription& desc)
 
 String GraphController::addNodeUnconnected (const PluginDescription& desc)
 {
+    if (GraphDocument::isSourceDescription (desc))
+        return addSourcePlugin (desc);
+
     const String uid = addPluginNodeAtNextSlot (desc);
     addPluginNodeToGraph (document.getNodeByUid (uid));
     rewireConnections();   // existing connections are untouched — nothing is rewritten serially
@@ -865,7 +932,8 @@ void GraphController::insertNodeStrips()
             continue;   // no live node at all (registration failed); a missing plugin's
                         // PassThrough stand-in IS live and gets a strip like any plugin
 
-        auto* stripNode = spliceStripAfter (it->second, document.getGain (uid), document.getPan (uid));
+        auto* stripNode = spliceStripAfter (it->second, document.getGain (uid), document.getPan (uid),
+                                            document.isSourceNode (uid) ? uid : String());
         if (stripNode == nullptr)
             continue;
 
@@ -874,7 +942,7 @@ void GraphController::insertNodeStrips()
 
         // Dry/wet: the parallel dry branch exists only while the node is not fully
         // wet, so a default graph (every mix == 1) keeps the plain topology.
-        const float mix = document.getMix (uid);
+        const float mix = document.getMix (uid);   // always 1 for an instrument
         if (mix < 1.0f)
             insertMixNode (it->second, stripNode->nodeID, uid, mix);
     }
@@ -882,7 +950,8 @@ void GraphController::insertNodeStrips()
 
 // source -> strip -> (old destinations of source). Mirrors spliceMeterAfter but
 // carries the node's gain/pan. Returns the live strip node (for the mix splice).
-AudioProcessorGraph::Node* GraphController::spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan)
+AudioProcessorGraph::Node* GraphController::spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan,
+                                                              const String& monoSourceUid)
 {
     auto stripNode = addNodeBatched (std::make_unique<NodeStripProcessor>());
     if (stripNode == nullptr)
@@ -901,6 +970,27 @@ AudioProcessorGraph::Node* GraphController::spliceStripAfter (AudioProcessorGrap
 
     for (int ch = 0; ch < MeterTap::numChannels; ++ch)
         connectBatched ({ { source, ch }, { stripId, ch } });
+
+    // A synth that only offers one output channel feeds both strip channels (no extra node), and its
+    // cable's second channel (illegal on the synth itself) leaves from the strip's channel 1 instead.
+    // An effect that stayed mono keeps today's behaviour.
+    if (monoSourceUid.isNotEmpty())
+        if (auto* n = graph.getNodeForId (source))
+            if (n->getProcessor()->getTotalNumOutputChannels() == 1)
+            {
+                connectBatched ({ { source, 0 }, { stripId, 1 } });
+
+                ValueTree docEdges = document.getConnections();
+                for (int i = 0; i < docEdges.getNumChildren(); ++i)
+                {
+                    ValueTree e = docEdges.getChild (i);
+                    if (e.getProperty ("srcUid").toString() != monoSourceUid || (int) e.getProperty ("srcCh") != 1)
+                        continue;
+                    const auto dst = uidToNodeId.find (e.getProperty ("dstUid").toString());
+                    if (dst != uidToNodeId.end())
+                        connectBatched ({ { stripId, 1 }, { dst->second, (int) e.getProperty ("dstCh") } });
+                }
+            }
 
     if (auto* strip = dynamic_cast<NodeStripProcessor*> (stripNode->getProcessor()))
     {
@@ -996,6 +1086,9 @@ const MeterTap* GraphController::getNodeMeter (const String& uid) const noexcept
 
 void GraphController::setNodeMix (const String& uid, float mix)
 {
+    if (document.isSourceNode (uid))
+        return;   // an instrument has no dry signal
+
     mix = jlimit (0.0f, 1.0f, mix);
     document.setMix (uid, mix);
 
@@ -1090,16 +1183,7 @@ void GraphController::rewireConnections()
     for (const auto& c : graph.getConnections())
         disconnectBatched (c);
 
-    ValueTree connections = document.getConnections();
-    for (int i = 0; i < connections.getNumChildren(); ++i)
-    {
-        ValueTree c = connections.getChild (i);
-        const auto src = uidToNodeId.find (c.getProperty ("srcUid").toString());
-        const auto dst = uidToNodeId.find (c.getProperty ("dstUid").toString());
-        if (src != uidToNodeId.end() && dst != uidToNodeId.end())
-            connectBatched ({ { src->second, (int) c.getProperty ("srcCh") },
-                                   { dst->second, (int) c.getProperty ("dstCh") } });
-    }
+    connectDocumentEdges();
 
     insertNodeStrips();
     insertMasterMeters();

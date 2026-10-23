@@ -720,7 +720,14 @@ void IconMenu::removePluginsLackingInputOutput()
 {
     // NOTE: channel counts in PluginDescription are unreliable for VST3;
     // this preserves upstream behaviour and will be revisited with the GUI.
+    // Instruments (no audio input) are kept as sources: the isInstrument flag alone is enough, because
+    // VST3 channel counts in descriptions are unreliable. Effects keep the stereo in/out rule.
     for (const auto& plugin : knownPluginList.getTypes())
-        if (plugin.numInputChannels < 2 || plugin.numOutputChannels < 2)
+    {
+        const bool keep = GraphDocument::isSourceDescription (plugin)
+                              ? plugin.numOutputChannels >= 1 || plugin.isInstrument
+                              : plugin.numInputChannels >= 2 && plugin.numOutputChannels >= 2;
+        if (! keep)
             knownPluginList.removeType (plugin);
+    }
 }

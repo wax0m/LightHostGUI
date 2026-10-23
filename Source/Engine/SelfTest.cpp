@@ -27,10 +27,94 @@ namespace
         }
     };
 
+    // Test-only processors (installed through GraphController::instanceFactory) so instrument and
+    // multi-output behaviour is checked without any plugin on the machine.
+    struct FakeProcessorBase : AudioProcessor
+    {
+        using AudioProcessor::AudioProcessor;
+        const String getName() const override { return "Fake"; }
+        void prepareToPlay (double, int) override {}
+        void releaseResources() override {}
+        double getTailLengthSeconds() const override { return 0.0; }
+        bool producesMidi() const override { return false; }
+        AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        int getNumPrograms() override { return 1; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram (int) override {}
+        const String getProgramName (int) override { return {}; }
+        void changeProgramName (int, const String&) override {}
+        void getStateInformation (MemoryBlock&) override {}
+        void setStateInformation (const void*, int) override {}
+    };
+
+    // 0-in synth: outputs `level` on every output channel while a note is held.
+    struct FakeInstrument : FakeProcessorBase
+    {
+        FakeInstrument (bool stereoOut, float noteLevel)
+            : FakeProcessorBase (BusesProperties().withOutput ("Out", stereoOut ? AudioChannelSet::stereo() : AudioChannelSet::mono(), true)),
+              stereo (stereoOut), level (noteLevel) {}
+
+        bool isBusesLayoutSupported (const BusesLayout& l) const override
+        {
+            return l.getMainInputChannelSet().isDisabled()
+                && l.getMainOutputChannelSet() == (stereo ? AudioChannelSet::stereo() : AudioChannelSet::mono());
+        }
+        bool acceptsMidi() const override { return true; }
+        void processBlock (AudioBuffer<float>& buffer, MidiBuffer& midi) override
+        {
+            int start = 0;
+            for (const auto m : midi)
+            {
+                fill (buffer, start, m.samplePosition);
+                start = m.samplePosition;
+                if (m.getMessage().isNoteOn())  held = true;
+                if (m.getMessage().isNoteOff()) held = false;
+            }
+            fill (buffer, start, buffer.getNumSamples());
+        }
+        using AudioProcessor::processBlock;
+
+        void fill (AudioBuffer<float>& b, int from, int to)
+        {
+            for (int ch = 0; ch < getTotalNumOutputChannels() && ch < b.getNumChannels(); ++ch)
+                for (int i = from; i < to; ++i)
+                    b.setSample (ch, i, held ? level : 0.0f);
+        }
+        bool stereo; float level; bool held = false;
+    };
+
+    // 2-in/2-out pass-through effect that accepts MIDI (like Graillon or MAutoPitch).
+    struct FakeEffect : FakeProcessorBase
+    {
+        FakeEffect() : FakeProcessorBase (BusesProperties().withInput ("In", AudioChannelSet::stereo(), true)
+                                                           .withOutput ("Out", AudioChannelSet::stereo(), true)) {}
+        bool acceptsMidi() const override { return true; }
+        void processBlock (AudioBuffer<float>&, MidiBuffer&) override {}
+        using AudioProcessor::processBlock;
+    };
+
+    PluginDescription fakeDescription (const String& name, bool instrument)
+    {
+        PluginDescription d;
+        d.name = name; d.pluginFormatName = "VST3"; d.isInstrument = instrument;
+        d.numInputChannels  = instrument ? 0 : 2;
+        d.numOutputChannels = 2;
+        d.fileOrIdentifier  = "fake:" + name;
+        return d;
+    }
+
+    // Largest absolute sample of one channel of a block.
+    float peakOf (const AudioBuffer<float>& b, int ch)
+    {
+        return b.getMagnitude (ch, 0, b.getNumSamples());
+    }
+
     // Locate loadable stereo FX VST3s. Returns their PluginDescriptions.
     Array<PluginDescription> discoverPlugins (AudioPluginFormatManager& fm,
                                               const StringArray& explicitPaths,
-                                              int wanted)
+                                              int wanted,
+                                              bool instruments = false)
     {
         StringArray candidates = explicitPaths;
 
@@ -62,10 +146,11 @@ namespace
 
                 for (auto* desc : types)
                 {
-                    // The host only routes stereo FX (channels 0-1), no instruments.
-                    if (! desc->isInstrument
-                        && desc->numInputChannels  >= 2
-                        && desc->numOutputChannels >= 2)
+                    // Effects: stereo in/out. Instruments (on request): any synth with an output.
+                    if (instruments ? (desc->isInstrument && desc->numOutputChannels >= 1)
+                                    : (! desc->isInstrument
+                                       && desc->numInputChannels  >= 2
+                                       && desc->numOutputChannels >= 2))
                     {
                         found.add (*desc);
                         break;
@@ -369,6 +454,150 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         r.expect (l < 1.0e-4f && rr > 0.0f, "mono toggled back OFF: left silent again (live re-splice)");
 
         f.deleteFile();
+    }
+
+    //==========================================================================
+    // Baseline — zero cost when unused (v1.2 B). A serial graph with one OUT and no instrument must keep
+    //            the exact node and connection counts of v1.1. The numbers were recorded on the engine
+    //            before B1; they must hold after every B commit. Needs no installed plugin: the nodes
+    //            are stand-ins for plugins that don't exist.
+    //==========================================================================
+    std::cout << "\n[Baseline] render sequence of a plain serial graph" << std::endl;
+    {
+        GraphFixture fx (formatManager, "baseline");
+        GraphController& controller = *fx.controller;
+        AudioProcessorGraph& graph = fx.graph;
+
+        PluginDescription ghost;
+        ghost.name = "GhostFx"; ghost.pluginFormatName = "VST3"; ghost.numInputChannels = 2; ghost.numOutputChannels = 2;
+        ghost.fileOrIdentifier = File::getSpecialLocation (File::tempDirectory).getChildFile ("lighthost_no_such_ghost.vst3").getFullPathName();
+
+        const int emptyNodes = graph.getNumNodes(), emptyConns = (int) graph.getConnections().size();
+        std::cout << "  baseline empty: nodes " << emptyNodes << ", connections " << emptyConns << std::endl;
+
+        controller.appendToChain (ghost);
+        controller.appendToChain (ghost);
+        const int nodes = graph.getNumNodes(), conns = (int) graph.getConnections().size();
+        std::cout << "  baseline IN->2 plugins->OUT: nodes " << nodes << ", connections " << conns << std::endl;
+        r.expect (emptyNodes == 5 && emptyConns == 8, "baseline: empty graph counts");
+        r.expect (nodes == 9 && conns == 16, "baseline: two-plugin serial graph counts");
+    }
+
+    //==========================================================================
+    // Test U (fake processors) — instrument nodes. A 0-input synth is a SOURCE: it sits beside the serial
+    //          chain wired to the main OUT, receives MIDI, takes no edge in and no dry/wet mix, and its note
+    //          reaches the output (a mono synth on both sides). New effects start with MIDI off. The chain
+    //          ops keep the instrument's edge. A missing instrument is silent. Adding one costs only the
+    //          node, its strip and the MIDI input node.
+    //==========================================================================
+    std::cout << "\n[U] instrument nodes (fake processors)" << std::endl;
+    {
+        const auto synthDesc = fakeDescription ("FakeSynth", true);
+        const auto fxDesc    = fakeDescription ("FakeFx", false);
+
+        GraphFixture fx (formatManager, "instrument");
+        GraphController& controller = *fx.controller;
+        AudioProcessorGraph& graph = fx.graph;
+        controller.instanceFactory = [] (const PluginDescription& d) -> std::unique_ptr<AudioProcessor>
+        {
+            if (d.name == "FakeSynth")  return std::make_unique<FakeInstrument> (true, 0.5f);
+            if (d.name == "FakeFx")     return std::make_unique<FakeEffect>();
+            return nullptr;   // anything else can't load
+        };
+
+        const String outUid = controller.document.getIoNodeUid (false);
+        const auto hasPair = [&controller] (const String& a, const String& b)
+        {
+            return controller.document.hasConnection (a, 0, b, 0) && controller.document.hasConnection (a, 1, b, 1);
+        };
+        const auto render = [&graph] (bool noteOn, AudioBuffer<float>& block)
+        {
+            block.clear();
+            MidiBuffer midi;
+            if (noteOn)
+                midi.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 0);
+            graph.processBlock (block, midi);
+        };
+
+        const int nodesBefore = graph.getNumNodes();
+        int before = controller.getPublishCount();
+        const String piano = controller.addPlugin (synthDesc);
+        r.expect (piano.isNotEmpty() && ! controller.isMissing (piano), "the instrument is added and live");
+        r.expect (controller.getPublishCount() - before == 1, "adding an instrument publishes exactly once");
+        r.expect (graph.getNumNodes() - nodesBefore == 3, "an instrument costs its node, its strip and the MIDI input node only");
+        r.expect (controller.document.isSourceNode (piano), "the node reads as a source");
+        r.expect (hasPair (piano, outUid), "the instrument is wired to the main OUT");
+        r.expect (controller.getNodeReceivesMidi (piano), "an instrument receives MIDI");
+        r.expect (controller.isLinearChain() && controller.getChain().empty(), "an instrument leaves the serial chain empty and linear");
+
+        const String e1 = controller.addPlugin (fxDesc);
+        const String e2 = controller.addPlugin (fxDesc);
+        r.expect (e1.isNotEmpty() && e2.isNotEmpty(), "two effects appended after the instrument");
+        r.expect (! controller.getNodeReceivesMidi (e1) && ! controller.getNodeReceivesMidi (e2), "new effects start with MIDI off");
+        r.expect (hasPair (controller.document.getIoNodeUid (true), e1) && hasPair (e1, e2) && hasPair (e2, outUid),
+                  "the effects form the serial chain IN -> e1 -> e2 -> OUT");
+        r.expect (hasPair (piano, outUid), "appending keeps the instrument's edge");
+        controller.moveDown (e1);
+        r.expect (hasPair (e2, e1) && hasPair (e1, outUid) && hasPair (piano, outUid), "Move Down keeps the instrument's edge");
+        controller.moveUp (e1);
+        r.expect (hasPair (e1, e2) && hasPair (piano, outUid), "Move Up keeps the instrument's edge");
+        r.expect (! controller.canConnectPair (e1, piano) && ! controller.connect (controller.document.getIoNodeUid (true), 0, piano, 0),
+                  "no connection INTO an instrument");
+
+        before = controller.getPublishCount();
+        controller.setNodeMix (piano, 0.3f);
+        r.expect (controller.getPublishCount() == before && controller.getNodeMix (piano) == 1.0f, "mix on an instrument is a no-op");
+
+        AudioBuffer<float> block (2, 512);
+        render (false, block);
+        r.expect (peakOf (block, 0) < 1.0e-6f && peakOf (block, 1) < 1.0e-6f, "silent before a note");
+        render (true, block);
+        r.expect (peakOf (block, 0) > 0.2f && peakOf (block, 1) > 0.2f, "a MIDI note reaches both output channels through the strip");
+        r.expect (std::abs (peakOf (block, 0) - peakOf (block, 1)) < 1.0e-4f, "centre pan: both channels equal");
+
+        // Replacing an effect by an instrument drops the edges that fed it.
+        const auto swapped = controller.replacePlugin (e2, synthDesc);
+        r.expect (swapped.ok && controller.document.isSourceNode (e2), "an effect can be replaced by an instrument");
+        bool anyInto = false;
+        for (const auto& c : controller.getConnections())
+            anyInto = anyInto || c.dstUid == e2;
+        r.expect (! anyInto, "replacing by an instrument removes the edges into the node");
+    }
+    {
+        GraphFixture fx (formatManager, "monosynth");
+        GraphController& controller = *fx.controller;
+        controller.instanceFactory = [] (const PluginDescription& d) -> std::unique_ptr<AudioProcessor>
+        {
+            if (d.name == "MonoSynth") return std::make_unique<FakeInstrument> (false, 0.5f);
+            return nullptr;
+        };
+        const String mono = controller.addPlugin (fakeDescription ("MonoSynth", true));
+        auto* node = controller.getNodeForUid (mono);
+        r.expect (node != nullptr && node->getProcessor()->getTotalNumOutputChannels() == 1, "the mono synth stays 1-out");
+
+        AudioBuffer<float> block (2, 512);
+        block.clear();
+        MidiBuffer midi;
+        midi.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 0);
+        fx.graph.processBlock (block, midi);
+        r.expect (peakOf (block, 0) > 0.2f && std::abs (peakOf (block, 0) - peakOf (block, 1)) < 1.0e-4f,
+                  "a mono synth is heard on both channels");
+    }
+    {
+        GraphFixture fx (formatManager, "ghostsynth");
+        GraphController& controller = *fx.controller;
+        controller.instanceFactory = [] (const PluginDescription&) -> std::unique_ptr<AudioProcessor> { return nullptr; };
+        const String ghost = controller.addPlugin (fakeDescription ("GhostSynth", true));
+        r.expect (ghost.isNotEmpty() && controller.isMissing (ghost) && controller.document.isSourceNode (ghost),
+                  "a missing instrument is a stand-in that still reads as a source");
+        r.expect (! controller.canConnectPair (controller.document.getIoNodeUid (true), ghost), "nothing can feed a missing instrument");
+
+        AudioBuffer<float> block (2, 512);
+        block.clear();
+        MidiBuffer midi;
+        midi.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 0);
+        fx.graph.processBlock (block, midi);
+        r.expect (peakOf (block, 0) < 1.0e-6f && peakOf (block, 1) < 1.0e-6f, "a missing instrument is silent");
     }
 
     const Array<PluginDescription> plugins = discoverPlugins (formatManager, explicitPluginPaths, 2);
@@ -930,8 +1159,9 @@ int runSelfTest (const StringArray& explicitPluginPaths)
 
         if (midiUid.isNotEmpty())
         {
-            r.expect (controller.getNodeReceivesMidi (midiUid),
-                      "receivesMidi defaults to true on a MIDI-accepting plugin");
+            r.expect (! controller.getNodeReceivesMidi (midiUid),
+                      "a newly added effect starts with receivesMidi off (v1.2)");
+            controller.setNodeReceivesMidi (midiUid, true);   // the splice assertions below need it on
             r.expect (controller.nodeAcceptsMidi (midiUid),
                       "nodeAcceptsMidi reports true for the discovered plugin");
 
@@ -972,7 +1202,9 @@ int runSelfTest (const StringArray& explicitPluginPaths)
 
             const String uid = controller.appendToChain (pA);
             r.expect (uid.isNotEmpty(), "plugin instantiated for the flag round-trip");
-            r.expect (controller.getNodeReceivesMidi (uid), "receivesMidi defaults to true");
+            r.expect (! controller.getNodeReceivesMidi (uid), "a newly added effect starts with receivesMidi off (v1.2)");
+            controller.setNodeReceivesMidi (uid, true);
+            r.expect (controller.getNodeReceivesMidi (uid), "receivesMidi can be set");
             controller.setNodeReceivesMidi (uid, false);
             r.expect (! controller.getNodeReceivesMidi (uid), "receivesMidi can be cleared");
             controller.save (*settings);
@@ -1806,6 +2038,44 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         }
 
         controller.save (*fx.settings);
+    }
+
+    //==========================================================================
+    // Test U (real VST3 instrument) — if the machine has one: it loads as a source, is wired to the main OUT,
+    //          receives MIDI and survives a note. Silence is reported, not failed (a sampler without its
+    //          library is silent by design).
+    //==========================================================================
+    std::cout << "\n[U] real VST3 instrument" << std::endl;
+    {
+        const auto instruments = discoverPlugins (formatManager, explicitPluginPaths, 1, /*instruments*/ true);
+        if (instruments.isEmpty())
+        {
+            std::cout << "  skipped (no instrument)" << std::endl;
+        }
+        else
+        {
+            std::cout << "  using instrument: " << instruments.getReference (0).name << std::endl;
+            GraphFixture fx (formatManager, "realinstrument");
+            GraphController& controller = *fx.controller;
+            const String uid = controller.addPlugin (instruments.getReference (0));
+            r.expect (uid.isNotEmpty() && ! controller.isMissing (uid), "the real instrument loads");
+            r.expect (controller.document.isSourceNode (uid), "it reads as a source");
+            r.expect (controller.document.hasConnection (uid, 0, controller.document.getIoNodeUid (false), 0), "it is wired to the main OUT");
+            r.expect (controller.getNodeReceivesMidi (uid) && controller.nodeAcceptsMidi (uid), "it receives MIDI");
+
+            float peak = 0.0f;
+            AudioBuffer<float> block (2, 512);
+            for (int b = 0; b < 64; ++b)
+            {
+                block.clear();
+                MidiBuffer midi;
+                if (b == 0) midi.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 0);
+                fx.graph.processBlock (block, midi);
+                peak = jmax (peak, peakOf (block, 0), peakOf (block, 1));
+            }
+            std::cout << "  note peak " << peak << (peak > 1.0e-6f ? "" : "  (silent: instrument may need its sound library)") << std::endl;
+            r.expect (std::isfinite (peak), "the note renders finite audio");
+        }
     }
 
     //==========================================================================

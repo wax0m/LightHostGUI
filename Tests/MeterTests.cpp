@@ -278,6 +278,33 @@ int runMeterTests (int& checks)
                           && inst.getBus (false, 0)->getCurrentLayout() == AudioChannelSet::stereo(),
                "forceStereo: no input bus, mono output promoted to stereo");
 
+        // A synth that only offers a mono output stays mono (the controller feeds both sides itself);
+        // a stereo-capable one with no inputs ends stereo.
+        struct MonoOnlySynth : juce::AudioProcessor
+        {
+            MonoOnlySynth() : juce::AudioProcessor (BusesProperties().withOutput ("Out", AudioChannelSet::mono(), true)) {}
+            bool isBusesLayoutSupported (const BusesLayout& l) const override { return l.getMainOutputChannelSet() == AudioChannelSet::mono(); }
+            const String getName() const override { return "MonoSynth"; }
+            void prepareToPlay (double, int) override {}
+            void releaseResources() override {}
+            void processBlock (AudioBuffer<float>&, MidiBuffer&) override {}
+            double getTailLengthSeconds() const override { return 0.0; }
+            bool acceptsMidi() const override { return true; }
+            bool producesMidi() const override { return false; }
+            AudioProcessorEditor* createEditor() override { return nullptr; }
+            bool hasEditor() const override { return false; }
+            int getNumPrograms() override { return 1; }
+            int getCurrentProgram() override { return 0; }
+            void setCurrentProgram (int) override {}
+            const String getProgramName (int) override { return {}; }
+            void changeProgramName (int, const String&) override {}
+            void getStateInformation (MemoryBlock&) override {}
+            void setStateInformation (const void*, int) override {}
+        } monoSynth;
+        check (checks, ! lighthost::buses::forceStereo (monoSynth, 44100.0, 64) && monoSynth.getTotalNumInputChannels() == 0
+                          && monoSynth.getTotalNumOutputChannels() == 1,
+               "forceStereo: a mono-only synth stays 0-in/1-out (not promoted, no crash)");
+
         // Rejects its own initial (mono) layout: still ends up stereo.
         struct PickyProc : BusProc
         {

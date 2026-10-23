@@ -37,6 +37,7 @@ static PluginDescription makeDesc (const String& name)
     PluginDescription d;
     d.name              = name;
     d.pluginFormatName  = "VST3";
+    d.numInputChannels  = d.numOutputChannels = 2;   // an effect: zero inputs would read as an instrument
     d.category          = "Fx";
     d.manufacturerName  = "TestCo";
     d.version           = "1.0";
@@ -271,6 +272,7 @@ int main()
         PluginDescription oldDesc;
         oldDesc.name = "TAL-Dub-3"; oldDesc.version = "V1.1.0"; oldDesc.pluginFormatName = "VST";
         oldDesc.fileOrIdentifier = "C:/vst/TAL-Dub-3.dll"; oldDesc.uniqueId = 1234;
+        oldDesc.numInputChannels = oldDesc.numOutputChannels = 2;
         CHECK (GraphDocument::legacyKey ("state", oldDesc) == "plugin-state-TAL-Dub-3V1.1.0VST",
                "legacyKey reproduces the old settings key");
 

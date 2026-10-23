@@ -22,7 +22,7 @@ namespace
         GraphDocument d;
         for (int i = 0; i < plugins; ++i)
         {
-            PluginDescription pd; pd.name = "P" + String (i); pd.pluginFormatName = "VST3";
+            PluginDescription pd; pd.name = "P" + String (i); pd.pluginFormatName = "VST3"; pd.numInputChannels = pd.numOutputChannels = 2;
             d.addPluginNode (pd, 0.5f, 0.5f);
         }
         return d;                          // 2 IO + `plugins` nodes
@@ -52,7 +52,7 @@ int runPresetTests (int& checks)
     // Deep-copy independence: editing a retrieved doc must not touch the store.
     {
         GraphDocument got = store.getPresetDocument (0);
-        PluginDescription extra; extra.name = "X"; extra.pluginFormatName = "VST3";
+        PluginDescription extra; extra.name = "X"; extra.pluginFormatName = "VST3"; extra.numInputChannels = extra.numOutputChannels = 2;
         got.addPluginNode (extra, 0.5f, 0.5f);
         check (checks, store.getPresetDocument (0).getNodes().getNumChildren() == 3,
                "store is unaffected by edits to a retrieved document (deep copy)");

@@ -54,6 +54,7 @@ public:
     String addPlugin (const PluginDescription&);       // returns new node uid, "" on failure
     String appendToChain (const PluginDescription&);   // serial add (linear chains)
     String addNodeUnconnected (const PluginDescription&);   // no connections touched
+    String addSourcePlugin (const PluginDescription&);      // instrument: beside the chain, wired to the main OUT
     // Remove ONE node and heal around it (bridge each upstream edge to each
     // downstream edge with channel continuity). No other edge is touched and no
     // plugin is reloaded, so branched routing and live instances survive a delete.
@@ -176,6 +177,10 @@ public:
 
     GraphDocument document;
 
+    // Test seam: when set, plugin instances come from here instead of the format manager
+    // (a null result is a plugin that can't load). Production code never sets it.
+    std::function<std::unique_ptr<AudioProcessor> (const PluginDescription&)> instanceFactory;
+
 private:
     // Batched graph mutation: the ONLY callers of graph.addNode/removeNode/addConnection/
     // removeConnection/clear. They use UpdateKind::none; publishTopology() sends the result
@@ -191,10 +196,14 @@ private:
     void rebuild();                          // document -> live graph (reentrancy-safe wrapper)
     void rebuildNow();                       // the actual teardown/build pass
     void rewireConnections();                // re-wire live graph from doc WITHOUT reloading plugins
+    void connectDocumentEdges();             // doc connections -> live graph edges (shared by rebuild and rewire)
     void captureStates();                    // live plugin states -> document
     std::vector<String> getChainUids() const;            // audioIn .. audioOut, doc order
     void rewriteChainConnections (const std::vector<String>& chainUids);
-    String addPluginNodeAtNextSlot (const PluginDescription&);   // document node only, placed by placeNewPlugin
+    // The ONE place a new plugin's document node is made (placement + initial MIDI flag), shared by
+    // appendToChain, addNodeUnconnected and addSourcePlugin: instruments receive MIDI, new effects don't
+    // (so playing a piano can't steer a pitch corrector). Existing documents keep their flags.
+    String addPluginNodeAtNextSlot (const PluginDescription&);
     // Instantiate ONE plugin document node into the live graph (PassThrough stand-in
     // + missingPlugins entry when the plugin can't load) and register it in
     // uidToNodeId. Shared by rebuildNow and the incremental add paths.
@@ -217,7 +226,8 @@ private:
 
     void insertNodeStrips();
     void insertMidiRouting();
-    AudioProcessorGraph::Node* spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan);
+    AudioProcessorGraph::Node* spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan,
+                                                 const String& monoSourceUid = {});
     // Splice a dry/wet mix node between a plugin and its strip: plugin -> mix(wet) -> strip,
     // with the plugin's own input sources tapped in parallel into mix's dry inputs.
     void insertMixNode (AudioProcessorGraph::NodeID pluginId, AudioProcessorGraph::NodeID stripId,

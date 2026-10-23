@@ -28,6 +28,7 @@
 
 #include <JuceHeader.h>
 #include <optional>
+#include <set>
 
 class GraphDocument
 {
@@ -73,6 +74,15 @@ public:
     void clearAllPluginStates();
 
     static std::optional<PluginDescription> getPluginDescription (const ValueTree& node);
+
+    // Instruments (VST3 synths, "sources"): a plugin with no audio input. Judged from the stored
+    // description, so a missing instrument still reads as one. A source has no input port, takes no
+    // dry/wet mix and can't be the target of a connection.
+    static bool isSourceDescription (const PluginDescription&);          // isInstrument || no input channels
+    bool isSourceNode (const String& uid) const;
+    // Sources whose out-edges all go to audioOut nodes (none at all counts too): they sit beside the
+    // serial chain, so isLinearChain and the tray chain ops ignore them and their edges.
+    std::set<String> getSideNodes() const;
 
     // Replace a plugin node's implementation in place (uid, wiring, strip, position, flags stay).
     // Sets PLUGIN + name + state; the first replace also keeps the original description and state

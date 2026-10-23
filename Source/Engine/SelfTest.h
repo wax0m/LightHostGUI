@@ -26,6 +26,7 @@
 //    R. exactly one output guard in the live graph; corrupt persisted gain is clamped.
 //    S. an unreadable saved graph is backed up and reported, never silently overwritten.
 //    T. replacing a plugin in place keeps wiring and strip, imports a VST2 state, publishes once.
+//    U. instrument nodes: a 0-input synth is a source beside the chain, wired to OUT, MIDI on (fake processors; a real VST3 instrument when found).
 //
 //  Used by both the LightHostRuntimeTests console target and the shipping app's
 //  `-run-selftest` command-line switch, so CI can verify the real binary.

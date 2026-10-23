@@ -184,11 +184,15 @@ bool GraphDocument::getReceivesMidi (const String& uid) const
 
 void GraphDocument::setMix (const String& uid, float mix)
 {
+    if (isSourceNode (uid))
+        return;   // no dry signal to blend with
     getNodeByUid (uid).setProperty (idMix, sanitise (mix, 0.0f, 1.0f, 1.0f), nullptr);
 }
 
 float GraphDocument::getMix (const String& uid) const
 {
+    if (isSourceNode (uid))
+        return 1.0f;
     return sanitise ((float) getNodeByUid (uid).getProperty (idMix, 1.0f), 0.0f, 1.0f, 1.0f);
 }
 
@@ -366,6 +370,7 @@ bool GraphDocument::canAddConnection (const String& srcUid, int srcCh, const Str
 
     if (srcNode.getProperty (idType).toString() == typeAudioOut) return false;   // output is a sink
     if (dstNode.getProperty (idType).toString() == typeAudioIn)  return false;   // input is a source
+    if (isSourceNode (dstUid))                                   return false;   // an instrument has no input
 
     if (hasConnection (srcUid, srcCh, dstUid, dstCh)) return false;              // duplicate
     if (pathExists (dstUid, srcUid))                 return false;              // would create a cycle
@@ -594,15 +599,63 @@ GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings
 }
 
 //==============================================================================
+bool GraphDocument::isSourceDescription (const PluginDescription& d)
+{
+    return d.isInstrument || d.numInputChannels == 0;
+}
+
+bool GraphDocument::isSourceNode (const String& uid) const
+{
+    const ValueTree node = getNodeByUid (uid);
+    if (! node.isValid() || node.getProperty (idType).toString() != typePlugin)
+        return false;
+
+    const ValueTree plugin = node.getChildWithName ("PLUGIN");
+    if (! plugin.isValid())
+        return false;
+
+    return (bool) plugin.getProperty ("isInstrument", false)
+        || (plugin.hasProperty ("numInputs") && (int) plugin.getProperty ("numInputs") == 0);
+}
+
+std::set<String> GraphDocument::getSideNodes() const
+{
+    std::set<String> side;
+    ValueTree nodes = state.getChildWithName (idNodes);
+    ValueTree conns = state.getChildWithName (idConnections);
+
+    for (int i = 0; i < nodes.getNumChildren(); ++i)
+    {
+        const String uid = nodes.getChild (i).getProperty (idUid).toString();
+        if (! isSourceNode (uid))
+            continue;
+
+        bool onlyToOutputs = true;
+        for (int c = 0; c < conns.getNumChildren() && onlyToOutputs; ++c)
+        {
+            ValueTree edge = conns.getChild (c);
+            if (edge.getProperty (idSrcUid).toString() == uid
+                && getNodeByUid (edge.getProperty (idDstUid).toString()).getProperty (idType).toString() != typeAudioOut)
+                onlyToOutputs = false;
+        }
+        if (onlyToOutputs)
+            side.insert (uid);
+    }
+    return side;
+}
+
 bool GraphDocument::isLinearChain() const
 {
     const String in  = getIoNodeUid (true);
     const String out = getIoNodeUid (false);
 
+    const std::set<String> side = getSideNodes();   // instruments beside the chain don't count
+
     ValueTree nodes = state.getChildWithName (idNodes);
     int pluginCount = 0;
     for (int i = 0; i < nodes.getNumChildren(); ++i)
-        if (nodes.getChild (i).getProperty (idType).toString() == typePlugin)
+        if (nodes.getChild (i).getProperty (idType).toString() == typePlugin
+            && side.count (nodes.getChild (i).getProperty (idUid).toString()) == 0)
             ++pluginCount;
 
     // Node-level distinct edges (dedupe the two stereo channels of each hop).
@@ -611,7 +664,9 @@ bool GraphDocument::isLinearChain() const
     for (int i = 0; i < conns.getNumChildren(); ++i)
     {
         ValueTree c = conns.getChild (i);
-        edges.insert ({ c.getProperty (idSrcUid).toString(), c.getProperty (idDstUid).toString() });
+        const String src = c.getProperty (idSrcUid).toString();
+        if (side.count (src) == 0)
+            edges.insert ({ src, c.getProperty (idDstUid).toString() });
     }
 
     // Empty chain (no plugins): linear if there are no edges, or just in -> out.

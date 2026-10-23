@@ -23,7 +23,7 @@ namespace
 
     PluginDescription fx (const String& name)
     {
-        PluginDescription d; d.name = name; d.pluginFormatName = "VST3"; return d;
+        PluginDescription d; d.name = name; d.pluginFormatName = "VST3"; d.numInputChannels = d.numOutputChannels = 2; return d;
     }
 }
 
@@ -235,6 +235,64 @@ int runRoutingTests (int& checks)
             d.setNodePosition (d.getIoNodeUid (false), 5000.0f, 260.0f);
             check (checks, ! lighthost::placeNewPlugin (d).moveOutTo.has_value(), "placement: a distant OUT is left alone");
         }
+    }
+
+    // --- Instruments (sources) beside the chain ------------------------------------
+    {
+        using namespace lighthost::geometry;
+        const auto synth = [] (const String& name)
+        {
+            PluginDescription d; d.name = name; d.pluginFormatName = "VST3"; d.isInstrument = true;
+            d.numInputChannels = 0; d.numOutputChannels = 2;
+            return d;
+        };
+        const auto wirePair = [] (GraphDocument& d, const String& a, const String& b)
+        {
+            d.addConnection (a, 0, b, 0);
+            d.addConnection (a, 1, b, 1);
+        };
+
+        GraphDocument d;
+        const String in2 = d.getIoNodeUid (true), out2 = d.getIoNodeUid (false);
+        const String a = d.addPluginNode (fx ("A"), 400.0f, 260.0f);
+        const String piano = d.addPluginNode (synth ("Piano"), 100.0f, 560.0f);
+        wirePair (d, in2, a);
+        wirePair (d, a, out2);
+        wirePair (d, piano, out2);
+
+        check (checks,   d.isSourceNode (piano) && ! d.isSourceNode (a) && ! d.isSourceNode (in2), "isSourceNode: only the instrument");
+        check (checks,   GraphDocument::isSourceDescription (synth ("S")) && ! GraphDocument::isSourceDescription (fx ("E")),
+               "isSourceDescription: instrument flag or no inputs");
+        check (checks, ! d.canAddConnection (a, 0, piano, 0) && ! d.canAddConnection (in2, 1, piano, 1), "no edge INTO an instrument");
+        check (checks,   d.canAddConnection (piano, 0, a, 0), "an instrument can feed an effect");
+        check (checks,   d.getSideNodes().count (piano) == 1 && d.getSideNodes().count (a) == 0, "instrument wired only to OUT is a side node");
+        check (checks,   d.isLinearChain(), "IN->A->OUT plus piano->OUT is still a linear chain");
+        check (checks,   near (lighthost::placeNewPlugin (d).centre.x, 400.0f + (float) nodeSlot),
+               "placement: the instrument feeding OUT is not the anchor");
+
+        d.setMix (piano, 0.25f);
+        check (checks,   d.getMix (piano) == 1.0f, "mix of an instrument is a no-op");
+        d.setMix (a, 0.25f);
+        check (checks,   near (d.getMix (a), 0.25f), "mix of an effect still works");
+
+        d.addConnection (piano, 0, a, 0);   // the instrument now feeds A: it is part of the signal path
+        check (checks, ! d.isLinearChain() && d.getSideNodes().count (piano) == 0, "an instrument feeding an effect is not beside the chain");
+
+        // An unconnected instrument also stays out of the chain.
+        GraphDocument e;
+        const String lone = e.addPluginNode (synth ("Lone"), 100.0f, 560.0f);
+        check (checks, e.isLinearChain() && e.getSideNodes().count (lone) == 1, "an unconnected instrument keeps an empty chain linear");
+
+        // New instrument placement: below IN, steps down past a card in the way.
+        GraphDocument g;
+        const auto p1 = lighthost::placeNewSource (g);
+        check (checks, near (p1.x, 113.0f) && p1.y > g.getNodeY (g.getIoNodeUid (true)),
+               "placeNewSource: below IN, clamped onto the canvas");
+        const String first = g.addPluginNode (synth ("First"), p1.x, p1.y);
+        ignoreUnused (first);
+        const auto p2 = lighthost::placeNewSource (g);
+        check (checks, near (p2.x, p1.x) && p2.y >= p1.y + (float) (cardHeight + nodeGap) - 1.0f,
+               "placeNewSource: a second instrument steps down past the first");
     }
 
     std::cout << (failures == 0 ? "  routing ok" : "  routing FAILED") << std::endl;
