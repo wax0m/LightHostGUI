@@ -421,18 +421,22 @@ bool GraphDocument::migrateTree (ValueTree& graph)
 
     if (anyOverlap (centres))
     {
-        for (int step = 1; step <= 20; ++step)
+        bool cleared = false;
+        for (int step = 1; step <= 20 && ! cleared; ++step)
         {
             const float f = 1.0f + 0.1f * (float) step;
             for (size_t i = 0; i < items.size(); ++i)
                 centres[i] = origin + (items[i].centre - origin) * f;
-            if (! anyOverlap (centres))
-                break;
+            cleared = ! anyOverlap (centres);
         }
 
-        // ... and if a tightly packed layout still overlaps, push nodes right in x order until they clear.
-        if (anyOverlap (centres))
+        // ... and if no scale clears a tightly packed layout, go back to the unscaled one (a 3x layout would
+        // leave thousands of px of empty canvas) and push nodes right in x order until they clear.
+        if (! cleared)
         {
+            for (size_t i = 0; i < items.size(); ++i)
+                centres[i] = items[i].centre;
+
             std::vector<size_t> order = plugins;
             std::stable_sort (order.begin(), order.end(), [&] (size_t a, size_t b) { return centres[a].x < centres[b].x; });
 
@@ -458,6 +462,30 @@ bool GraphDocument::migrateTree (ValueTree& graph)
                 }
             }
         }
+    }
+
+    // A card pushed right can end up on top of OUT (cards paint above the terminals). Raw rects, so the plain
+    // v1 default (last card 2 px into OUT) is left alone; only a real cover moves OUT, to just right of the cards.
+    for (size_t o = 0; o < items.size(); ++o)
+    {
+        if (items[o].node.getProperty (idType).toString() != typeAudioOut)
+            continue;
+
+        const auto outRect = nodeRect (true, centres[o]);
+        float rightmost = 0.0f;
+        bool covered = false;
+        for (auto idx : plugins)
+        {
+            const auto card = nodeRect (false, centres[idx]);
+            rightmost = jmax (rightmost, card.getRight());
+            const float overlapX = jmin (card.getRight(), outRect.getRight()) - jmax (card.getX(), outRect.getX());
+            const float overlapY = jmin (card.getBottom(), outRect.getBottom()) - jmax (card.getY(), outRect.getY());
+            if (overlapX >= (float) endpointWidth * 0.5f && overlapY > 0.0f)
+                covered = true;
+        }
+
+        if (covered)
+            centres[o].x = rightmost + (float) nodeGap + (float) endpointWidth * 0.5f;
     }
 
     // Shift so no node starts left of or above the canvas origin.

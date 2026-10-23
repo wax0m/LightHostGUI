@@ -230,7 +230,25 @@ int main()
         CHECK (d3.getNodeX ("IN") < d3.getNodeX ("P1") && d3.getNodeX ("P1") < d3.getNodeX ("P2") && d3.getNodeX ("P2") < d3.getNodeX ("OUT"),
                "migration keeps the left-to-right order");
 
-        const auto d4 = GraphDocument::fromXml (makeV1 ({ { "IN", "audioIn", 0.05f, 0.5f }, { "OUT", "audioOut", 0.95f, 0.5f } }, ""));
+        CHECK (nearPx (d2.getNodeX ("OUT"), 1014.0f), "R2: the plain v1 default keeps OUT where it was");
+
+        // A tight cluster no scale can clear: stays near its v1 place (R6), OUT is moved clear of the cards (R2).
+        const auto d6 = GraphDocument::fromXml (makeV1 ({ { "IN", "audioIn", 0.05f, 0.5f }, { "P1", "plugin", 0.86f, 0.5f },
+                                                          { "P2", "plugin", 0.88f, 0.5f }, { "P3", "plugin", 0.90f, 0.5f },
+                                                          { "OUT", "audioOut", 0.95f, 0.5f } }));
+        CHECK (noOverlap (d6), "R6: a tight cluster is separated");
+        CHECK (std::abs (d6.getNodeX ("P1") - 931.0f) < 30.0f, "R6: the first card stays near its v1 x (no 3x blow-up)");
+        CHECK (d6.getNodeX ("P1") < d6.getNodeX ("P2") && d6.getNodeX ("P2") < d6.getNodeX ("P3"), "R6: left-to-right order kept");
+        {
+            using lighthost::geometry::nodeRect;
+            const auto outRect = nodeRect (true, { d6.getNodeX ("OUT"), d6.getNodeY ("OUT") });
+            bool hidden = false;
+            for (auto uid : { "P1", "P2", "P3" })
+                hidden = hidden || nodeRect (false, { d6.getNodeX (uid), d6.getNodeY (uid) }).intersects (outRect);
+            CHECK (d6.getNodeX ("OUT") > d6.getNodeX ("P3") && ! hidden, "R2: OUT is rightmost and not covered by a card");
+        }
+
+        const auto d4 =GraphDocument::fromXml (makeV1 ({ { "IN", "audioIn", 0.05f, 0.5f }, { "OUT", "audioOut", 0.95f, 0.5f } }, ""));
         CHECK (d4.migratedOnLoad && (int) d4.state.getProperty ("version") == 2, "a missing version attribute counts as v1");
 
         const auto d5 = GraphDocument::fromXml (makeV1 ({ { "IN", "audioIn", 0.05f, 0.5f }, { "OUT", "audioOut", 0.95f, 0.5f } }, "version=\"3\""));
