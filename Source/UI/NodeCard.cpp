@@ -186,6 +186,15 @@ void NodeCard::updateMeters()
     refreshParamReadouts();
 }
 
+// Same width as the title text area in paint().
+void NodeCard::updateNameTooltip()
+{
+    const int switchesLeft = showMidi ? midiRect.getX() : bypassRect.getX();
+    const float titleWidth = (float) (switchesLeft - statusDotRect.getRight() - 14);
+    const bool cut = juce::GlyphArrangement::getStringWidth (LightHostLookAndFeel::display (13.5f, true), name) > titleWidth;
+    setTooltip (cut ? name : juce::String());
+}
+
 void NodeCard::resized()
 {
     const int pad = 15;
@@ -203,6 +212,8 @@ void NodeCard::resized()
     }
     else
         midiRect = {};
+
+    updateNameTooltip();
 
     r.removeFromTop (14);   // divider band
 

@@ -71,6 +71,7 @@ private:
     const PresetStore& presetStore;
     Callbacks callbacks;
 
+    juce::TooltipWindow tooltipWindow { this, 700 };   // full text of cut card labels
     TitleBar          titleBar;
     juce::Viewport    viewport;
     CanvasView        canvas;

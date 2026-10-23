@@ -33,7 +33,7 @@ inline bool forwardMiddleToParent (juce::Component& c, const juce::MouseEvent& e
     return true;
 }
 
-class NodeCard : public juce::Component
+class NodeCard : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     static constexpr int cardWidth  = lighthost::geometry::cardWidth;
@@ -69,6 +69,7 @@ public:
 
 private:
     void applyBypassLook();
+    void updateNameTooltip();                                    // full plugin name when the title is elided
     void setupGainPanKnobs();                                    // host channel strip
     void setupPluginParamKnobs (const std::vector<params::ParamInfo>&);  // hosted-plugin params
     void setupMixKnob();                                         // dry/wet, on every live card
