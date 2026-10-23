@@ -43,6 +43,7 @@ public:
     // Non-empty when the last loadFrom() found an unreadable saved graph: a copy was kept
     // (see SettingsBackup.h) and the controller started from defaults.
     String getLoadWarning() const { return loadWarning; }
+    bool didMigrateOnLoad() const noexcept { return migratedOnLoad; }   // loadFrom() read a v1 (normalised) graph
 
     //==============================================================================
     // Serial-chain operations (tray menu)
@@ -220,6 +221,7 @@ private:
     MonoInputProcessor* monoNode = nullptr;             // runtime mono-collapse node (graph-owned)
     // Reentrant-rebuild coalescing — see the comment on rebuild() in the .cpp.
     String loadWarning;
+    bool migratedOnLoad = false;
     bool rebuilding = false;
     bool rebuildPending = false;
 

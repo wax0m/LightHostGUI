@@ -13,6 +13,7 @@
 
 #include <JuceHeader.h>
 #include "../Engine/GraphController.h"
+#include "../Engine/NodeGeometry.h"
 #include "LightHostLookAndFeel.h"
 #include "KnobStrip.h"
 #include "SegmentedMeter.h"
@@ -35,8 +36,8 @@ inline bool forwardMiddleToParent (juce::Component& c, const juce::MouseEvent& e
 class NodeCard : public juce::Component
 {
 public:
-    static constexpr int cardWidth  = 226;
-    static constexpr int cardHeight = 300;
+    static constexpr int cardWidth  = lighthost::geometry::cardWidth;
+    static constexpr int cardHeight = lighthost::geometry::cardHeight;
 
     NodeCard (GraphController& controller, GraphController::ChainItem item);
 

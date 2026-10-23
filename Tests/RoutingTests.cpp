@@ -70,11 +70,12 @@ int runRoutingTests (int& checks)
     check (checks, doc.canAddConnection (in, 0, A, 0),        "removed edge can be re-added");
 
     // --- node position persists through XML --------------------------------
-    doc.setNodePosition (B, 0.42f, 0.66f);
+    doc.setNodePosition (B, 420.0f, 660.0f);
     GraphDocument rt = GraphDocument::fromXml (doc.toXml());
     check (checks, rt.isValid(),                    "routed doc round-trips valid");
-    check (checks, near (rt.getNodeX (B), 0.42f),   "node X persists");
-    check (checks, near (rt.getNodeY (B), 0.66f),   "node Y persists");
+    check (checks, near (rt.getNodeX (B), 420.0f),  "node X persists");
+    check (checks, near (rt.getNodeY (B), 660.0f),  "node Y persists");
+    check (checks, ! rt.migratedOnLoad,             "a v2 document is not migrated again");
     check (checks, rt.hasConnection (A, 0, B, 0),   "arbitrary connections survive round-trip");
 
     // --- isLinearChain: gates the tray serial-chain ops ---------------------

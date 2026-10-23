@@ -1,4 +1,5 @@
 #include "GraphDocument.h"
+#include "NodeGeometry.h"
 #include <cmath>
 #include <set>
 #include <vector>
@@ -37,12 +38,12 @@ const char* const GraphDocument::typePlugin   = "plugin";
 GraphDocument::GraphDocument()
 {
     state = ValueTree (idGraph);
-    state.setProperty (idVersion, 1, nullptr);
+    state.setProperty (idVersion, currentVersion, nullptr);
     state.appendChild (ValueTree (idNodes), nullptr);
     state.appendChild (ValueTree (idConnections), nullptr);
 
-    addNodeInternal (typeAudioIn,  "Audio Input",  0.05f, 0.5f);
-    addNodeInternal (typeAudioOut, "Audio Output", 0.95f, 0.5f);
+    addNodeInternal (typeAudioIn,  "Audio Input",  lighthost::geometry::defaultInX,  lighthost::geometry::defaultY);
+    addNodeInternal (typeAudioOut, "Audio Output", lighthost::geometry::defaultOutX, lighthost::geometry::defaultY);
 }
 
 GraphDocument GraphDocument::fromXml (const String& xml)
@@ -54,7 +55,10 @@ GraphDocument GraphDocument::fromXml (const String& xml)
     {
         ValueTree tree = ValueTree::fromXml (*parsed);
         if (tree.hasType (idGraph))
+        {
+            doc.migratedOnLoad = migrateTree (tree);
             doc.state = tree;   // isValid() still vets nodes/connections/IO below
+        }
     }
 
     return doc;
@@ -240,12 +244,21 @@ void GraphDocument::removeConnectionsInvolving (const String& uid)
 void GraphDocument::setNodePosition (const String& uid, float x, float y)
 {
     ValueTree n = getNodeByUid (uid);
-    n.setProperty (idX, sanitise (x, 0.0f, 1.0f, 0.5f), nullptr);
-    n.setProperty (idY, sanitise (y, 0.0f, 1.0f, 0.5f), nullptr);
+    n.setProperty (idX, sanitise (x, 0.0f, lighthost::geometry::kMaxCoord, lighthost::geometry::fallbackX), nullptr);
+    n.setProperty (idY, sanitise (y, 0.0f, lighthost::geometry::kMaxCoord, lighthost::geometry::fallbackY), nullptr);
 }
 
-float GraphDocument::getNodeX (const String& uid) const { return sanitise ((float) getNodeByUid (uid).getProperty (idX, 0.5f), 0.0f, 1.0f, 0.5f); }
-float GraphDocument::getNodeY (const String& uid) const { return sanitise ((float) getNodeByUid (uid).getProperty (idY, 0.5f), 0.0f, 1.0f, 0.5f); }
+float GraphDocument::getNodeX (const String& uid) const
+{
+    return sanitise ((float) getNodeByUid (uid).getProperty (idX, lighthost::geometry::fallbackX),
+                     0.0f, lighthost::geometry::kMaxCoord, lighthost::geometry::fallbackX);
+}
+
+float GraphDocument::getNodeY (const String& uid) const
+{
+    return sanitise ((float) getNodeByUid (uid).getProperty (idY, lighthost::geometry::fallbackY),
+                     0.0f, lighthost::geometry::kMaxCoord, lighthost::geometry::fallbackY);
+}
 
 bool GraphDocument::hasConnection (const String& srcUid, int srcCh, const String& dstUid, int dstCh) const
 {
@@ -325,6 +338,148 @@ bool GraphDocument::canAddConnection (const String& srcUid, int srcCh, const Str
 }
 
 //==============================================================================
+// GRAPH version 1 stored node x/y NORMALISED (0..1) over a zoom-independent layout area; version 2
+// stores the node centre in logical canvas px. The v1 layout constants below are FROZEN here on
+// purpose: they describe how a v1 document looked at the default window and must never follow later
+// UI changes.
+bool GraphDocument::migrateTree (ValueTree& graph)
+{
+    using namespace lighthost::geometry;
+
+    if (! graph.hasType (idGraph) || (int) graph.getProperty (idVersion, 1) >= 2)
+        return false;   // already v2, or from a newer build: never downgrade
+
+    ValueTree nodes = graph.getChildWithName (idNodes);
+    if (! nodes.isValid())
+        return false;
+
+    struct Item { ValueTree node; bool endpoint; float nx, ny; Point<float> centre; };
+    std::vector<Item> items;
+    std::vector<size_t> plugins;   // indices into items, document order
+
+    const auto rawNorm = [] (const ValueTree& n, const Identifier& id)
+    {
+        const var v = n.getProperty (id);
+        const float f = v.isVoid() ? 0.5f : (float) v;
+        return std::isfinite (f) ? jlimit (0.0f, 1.0f, f) : 0.5f;
+    };
+
+    for (int i = 0; i < nodes.getNumChildren(); ++i)
+    {
+        ValueTree n = nodes.getChild (i);
+        const bool isPlugin = n.getProperty (idType).toString() == typePlugin;
+        if (isPlugin)
+            plugins.push_back (items.size());
+        items.push_back ({ n, ! isPlugin, rawNorm (n, idX), rawNorm (n, idY), {} });
+    }
+
+    // Serially built or migrated chains stacked every plugin at (0.5, 0.5); spread them left to right.
+    int stacked = 0;
+    for (auto idx : plugins)
+        if (std::abs (items[idx].nx - 0.5f) < 1.0e-3f && std::abs (items[idx].ny - 0.5f) < 1.0e-3f)
+            ++stacked;
+
+    const int n = (int) plugins.size();
+    if (stacked >= 2)
+        for (int i = 0; i < n; ++i)
+        {
+            items[plugins[(size_t) i]].nx = 0.2f + (float) i * 0.6f / (float) (n - 1);
+            items[plugins[(size_t) i]].ny = 0.5f;
+        }
+
+    // v1 layout at the default window.
+    const int refW = n >= 2 ? jmax (1200, 280 + roundToInt (270.0f * (float) (n - 1) / 0.6f)) : 1200;
+    const int refH = 700;
+    for (auto& it : items)
+        it.centre = { 140.0f + it.nx * (float) (refW - 280), 170.0f + it.ny * (float) (refH - 340) };
+
+    // A window bigger than the reference let v1 layouts be wider than the reference: if the plugin cards
+    // overlap here, scale the arrangement up about its top-left until they clear (up to 3x), ...
+    // Only card against card is checked: the narrow IN / OUT terminals never hide a card, and the v1
+    // default spread already puts the first card flush against IN.
+    const auto rectOf = [] (const Item& it, Point<float> c) { return nodeRect (it.endpoint, c).expanded ((float) nodeGap * 0.5f); };
+    const auto anyOverlap = [&] (const std::vector<Point<float>>& cs)
+    {
+        for (size_t a = 0; a < items.size(); ++a)
+            for (size_t b = a + 1; b < items.size(); ++b)
+                if (! items[a].endpoint && ! items[b].endpoint
+                    && rectOf (items[a], cs[a]).intersects (rectOf (items[b], cs[b])))
+                    return true;
+        return false;
+    };
+
+    Point<float> origin { 1.0e9f, 1.0e9f };
+    for (const auto& it : items)
+    {
+        const auto r = nodeRect (it.endpoint, it.centre);
+        origin = { jmin (origin.x, r.getX()), jmin (origin.y, r.getY()) };
+    }
+
+    std::vector<Point<float>> centres;
+    for (const auto& it : items)
+        centres.push_back (it.centre);
+
+    if (anyOverlap (centres))
+    {
+        for (int step = 1; step <= 20; ++step)
+        {
+            const float f = 1.0f + 0.1f * (float) step;
+            for (size_t i = 0; i < items.size(); ++i)
+                centres[i] = origin + (items[i].centre - origin) * f;
+            if (! anyOverlap (centres))
+                break;
+        }
+
+        // ... and if a tightly packed layout still overlaps, push nodes right in x order until they clear.
+        if (anyOverlap (centres))
+        {
+            std::vector<size_t> order = plugins;
+            std::stable_sort (order.begin(), order.end(), [&] (size_t a, size_t b) { return centres[a].x < centres[b].x; });
+
+            for (size_t k = 1; k < order.size(); ++k)
+            {
+                const size_t i = order[k];
+                for (int guard = 0; guard < 64; ++guard)
+                {
+                    bool moved = false;
+                    for (size_t j = 0; j < k; ++j)
+                    {
+                        const size_t o = order[j];
+                        if (rectOf (items[i], centres[i]).intersects (rectOf (items[o], centres[o])))
+                        {
+                            const float need = (nodeRect (items[o].endpoint, centres[o]).getWidth()
+                                                + nodeRect (items[i].endpoint, centres[i]).getWidth()) * 0.5f + (float) nodeGap;
+                            centres[i].x = centres[o].x + need;
+                            moved = true;
+                        }
+                    }
+                    if (! moved)
+                        break;
+                }
+            }
+        }
+    }
+
+    // Shift so no node starts left of or above the canvas origin.
+    float minLeft = 0.0f, minTop = 0.0f;
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        const auto r = nodeRect (items[i].endpoint, centres[i]);
+        minLeft = jmin (minLeft, r.getX());
+        minTop  = jmin (minTop,  r.getY());
+    }
+
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        items[i].node.setProperty (idX, sanitise (centres[i].x - minLeft, 0.0f, kMaxCoord, fallbackX), nullptr);
+        items[i].node.setProperty (idY, sanitise (centres[i].y - minTop,  0.0f, kMaxCoord, fallbackY), nullptr);
+    }
+
+    graph.setProperty (idVersion, currentVersion, nullptr);
+    return true;
+}
+
+//==============================================================================
 GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings)
 {
     GraphDocument doc;   // starts with audioIn/audioOut
@@ -351,8 +506,8 @@ GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings
     for (const auto& [orderTime, plugin] : ordered)
     {
         ignoreUnused (orderTime);
-        const float x = 0.1f + 0.8f * (float) (index + 1) / (float) (ordered.size() + 1);
-        const String uid = doc.addPluginNode (plugin, x, 0.5f);
+        const float x = lighthost::geometry::defaultInX + (float) ((index + 1) * lighthost::geometry::nodeSlot);
+        const String uid = doc.addPluginNode (plugin, x, lighthost::geometry::defaultY);
         doc.setBypassed (uid, settings.getBoolValue (legacyKey ("bypass", plugin), false));
         const String stateB64 = settings.getValue (legacyKey ("state", plugin));
         if (stateB64.isNotEmpty())
@@ -361,6 +516,9 @@ GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings
         ++index;
     }
     chain.push_back (doc.getIoNodeUid (false));
+    doc.setNodePosition (doc.getIoNodeUid (false),
+                         lighthost::geometry::defaultInX + (float) ((index + 1) * lighthost::geometry::nodeSlot),
+                         lighthost::geometry::defaultY);
 
     for (size_t i = 0; i + 1 < chain.size(); ++i)
     {

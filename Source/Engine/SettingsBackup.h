@@ -34,18 +34,24 @@ namespace lighthost
     // next save would overwrite it with defaults. Copies the file byte for byte to
     //   <settings file name>-unreadable-<yyyyMMdd-HHmmss>
     // nullopt = file absent or readable (nothing to do); File{} = unreadable but the copy failed; else the copy.
-    inline std::optional<juce::File> backupUnreadableSettingsFile (juce::PropertiesFile& settings)
+    // Copies the settings file byte for byte to <settings file name>-<label>-<yyyyMMdd-HHmmss>.
+    // Returns the copy, or {} when there is no file or the copy failed.
+    inline juce::File copySettingsFileAside (const juce::PropertiesFile& settings, const juce::String& label)
     {
         const auto file = settings.getFile();
-        if (! file.existsAsFile() || settings.isValidFile())
-            return std::nullopt;
+        if (! file.existsAsFile())
+            return {};
 
         const auto stamp = juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S");
-        const auto copy = file.getSiblingFile (file.getFileName() + "-unreadable-" + stamp);
+        const auto copy = file.getSiblingFile (file.getFileName() + "-" + label + "-" + stamp);
+        return file.copyFileTo (copy) ? copy : juce::File();
+    }
 
-        if (! file.copyFileTo (copy))
-            return juce::File();
+    inline std::optional<juce::File> backupUnreadableSettingsFile (juce::PropertiesFile& settings)
+    {
+        if (! settings.getFile().existsAsFile() || settings.isValidFile())
+            return std::nullopt;
 
-        return copy;
+        return copySettingsFileAside (settings, "unreadable");
     }
 }

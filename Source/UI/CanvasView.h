@@ -2,8 +2,8 @@
 //  CanvasView.h — the node canvas (design spec §"1C — tactile"), a free-form editable
 //  node graph: IN / OUT / plugin cards are draggable to arbitrary 2D positions, each
 //  node has a stereo input + output port, and cables are drawn from the document's
-//  connections. Positions round-trip through GraphController::getNodeX/Y +
-//  setNodePosition. Meters + the signal-flow dots are advanced from the MainComponent
+//  connections. Positions (the node CENTRE in logical px at 100 % zoom) round-trip through
+//  GraphController::getNodeX/Y + setNodePosition. Meters + the signal-flow dots are advanced from the MainComponent
 //  60 fps timer via tick().
 //
 //  Interaction:
@@ -73,20 +73,15 @@ public:
 
     void refresh();                 // rebuild node views from the document
     void tick();                    // 60 fps: meters + flow animation
-    int  getContentWidth() const noexcept { return virtualW; }
 
-    // Told by the host the viewport's pixel size and the current zoom. Node positions map
-    // onto a layout area of max(content, viewport pixels) that does NOT depend on the zoom
-    // (zooming never moves nodes); the canvas itself grows to fill the viewport at any zoom.
+    // Told by the host the viewport's pixel size and the current zoom. The canvas is as large as
+    // its content plus a margin, and never smaller than the viewport at any zoom (no dead area);
+    // node positions are absolute, so neither zooming nor resizing the window moves a node.
     void setViewportSize (int widthPx, int heightPx, float zoom);
 
     // Logical bounds of one node / of all nodes (for reveal and zoom-to-fit). Empty if none.
     juce::Rectangle<int> getNodeBounds (const juce::String& uid) const;
     juce::Rectangle<int> getContentBounds() const;
-
-    // Default viewport height the window opens at (the virtual canvas is taller and
-    // scrolls inside the viewport).
-    static constexpr int canvasHeight = 420;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -119,10 +114,7 @@ private:
     };
 
     void rebuildViews();
-    void applyCanvasSize();         // layout area + canvas size from content, viewport and zoom
-    void autoLayoutIfStacked();
-    juce::Point<int>   centreForNorm (float nx, float ny) const;
-    juce::Point<float> normForCentre (juce::Point<int> centre) const;
+    void applyCanvasSize();         // canvas size from the stored node positions, viewport and zoom
     void placeNode (juce::Component& c, const juce::String& uid);
     void moveNodeBy (const juce::String& uid, juce::Point<int> delta);
     void persistNodePosition (const juce::String& uid);
@@ -169,26 +161,11 @@ private:
     float flowPhase = 0.0f;
     float zoom = 1.0f;                       // for zoom-invariant hit tolerances
 
-    // Virtual (scrolled) canvas size and node-centre margins.
-    int virtualW = 1200;
-    int virtualH = 700;
-    static constexpr int marginX = 140;   // ~half card width + gutter
-    static constexpr int marginY = 170;   // ~half card height + gutter
-
-    // Layout tuning. Plugin cards auto-lay-out across the normalised [bandLo..bandHi]
-    // band (endpoints sit outside it: IN at 0.05, OUT at 0.95); refresh() scales the
-    // virtual width so adjacent plugin centres stay >= nodeSlot apart (no overlap).
-    static constexpr int   nodeSlot      = 270;    // card width (226) + gutter
-    static constexpr float layoutBandLo  = 0.2f;
-    static constexpr float layoutBandHi  = 0.8f;
-    static constexpr float layoutBandSpan = layoutBandHi - layoutBandLo;
-
-    // Viewport size in pixels (set by the host) and the zoom-independent layout area that
-    // normalised node positions map onto. The canvas may be larger (zoomed out: filler).
+    // Viewport size in pixels (set by the host).
     int viewportW = 0;
     int viewportH = 0;
-    int layoutW = 1200;
-    int layoutH = 700;
+
+    bool suppressPlacement = false;   // a live drag grows the canvas without re-placing nodes from the document
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CanvasView)
 };

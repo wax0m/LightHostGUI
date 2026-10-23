@@ -81,8 +81,8 @@ CanvasView::CanvasView (GraphController& c) : controller (c)
 {
     setWantsKeyboardFocus (true);   // Delete / Esc / Ctrl +,-,0
 
-    inNode.setSize (54, 150);
-    outNode.setSize (54, 150);
+    inNode.setSize (lighthost::geometry::endpointWidth, lighthost::geometry::endpointHeight);
+    outNode.setSize (lighthost::geometry::endpointWidth, lighthost::geometry::endpointHeight);
     addAndMakeVisible (inNode);
     addAndMakeVisible (outNode);
 
@@ -166,8 +166,6 @@ void CanvasView::rebuildViews()
             views.push_back ({ uid, card, true, true });
         }
     }
-
-    autoLayoutIfStacked();
 }
 
 void CanvasView::markRetryFailed (const juce::String& uid)
@@ -177,37 +175,6 @@ void CanvasView::markRetryFailed (const juce::String& uid)
             card->markRetryFailed();
 }
 
-void CanvasView::autoLayoutIfStacked()
-{
-    // Serially-built / migrated chains place every plugin at (0.5, 0.5) so they
-    // stack. If two or more plugin nodes are still at that default, spread them
-    // left→right in document order and persist, giving a sane first layout. Once a
-    // node has a real (dragged) position it is left untouched.
-    std::vector<juce::String> pluginUids;
-    int defaulted = 0;
-    for (const auto& v : views)
-    {
-        if (v.comp == &inNode || v.comp == &outNode)
-            continue;
-        pluginUids.push_back (v.uid);
-        const float x = controller.getNodeX (v.uid);
-        const float y = controller.getNodeY (v.uid);
-        if (std::abs (x - 0.5f) < 1.0e-3f && std::abs (y - 0.5f) < 1.0e-3f)
-            ++defaulted;
-    }
-
-    if (defaulted < 2)
-        return;
-
-    const int n = (int) pluginUids.size();
-    for (int i = 0; i < n; ++i)
-    {
-        const float nx = n == 1 ? 0.5f
-                                : layoutBandLo + (float) i * (layoutBandSpan / (float) (n - 1));
-        controller.setNodePosition (pluginUids[(size_t) i], nx, 0.5f);
-    }
-}
-
 void CanvasView::refresh()
 {
     rebuildViews();
@@ -215,15 +182,6 @@ void CanvasView::refresh()
     // A selection whose cable no longer exists (deleted, preset switch) is dropped.
     if (selection.has_value() && ! selectedCable().has_value())
         selection.reset();
-
-    // Scale the virtual width to the plugin count so a migrated multi-plugin chain
-    // lays out without overlap: plugins span the normalised layoutBand, so the usable
-    // width must be large enough that band-span / (n-1) maps to at least nodeSlot px.
-    const int pluginCount = cards.size();
-    const int spanPx = pluginCount > 1
-        ? juce::roundToInt ((float) nodeSlot * (float) (pluginCount - 1) / layoutBandSpan)
-        : 0;
-    virtualW = juce::jmax (1200, marginX * 2 + spanPx);
 
     applyCanvasSize();
     repaint();
@@ -241,18 +199,23 @@ void CanvasView::setViewportSize (int widthPx, int heightPx, float newZoom)
 
 void CanvasView::applyCanvasSize()
 {
-    // Layout area: at least the node content, and at least the viewport at 100 % so a
-    // large window has no dead gap. Deliberately zoom-independent: zooming scales the
-    // picture, it never re-lays the nodes.
-    layoutW = juce::jmax (virtualW, viewportW);
-    layoutH = juce::jmax (virtualH, viewportH);
+    // Content = the union of the stored node rects (read from the document, so it is right even
+    // before the views are placed). The canvas holds the content plus room for one more card, and
+    // always fills the viewport at any zoom. floor, not ceil: the scaled size must never exceed the
+    // viewport by a rounding pixel, or a scrollbar appears for nothing.
+    using namespace lighthost::geometry;
+    juce::Rectangle<float> content;
+    for (const auto& v : views)
+    {
+        const auto r = nodeRect (v.comp == &inNode || v.comp == &outNode,
+                                 { controller.getNodeX (v.uid), controller.getNodeY (v.uid) });
+        content = content.isEmpty() ? r : content.getUnion (r);
+    }
 
-    // The component also covers the whole viewport when zoomed out (empty filler).
-    // floor, not ceil: the scaled size must never exceed the viewport by a rounding pixel,
-    // or a scrollbar appears for nothing.
     const int fillW = (int) std::floor ((float) viewportW / zoom);
     const int fillH = (int) std::floor ((float) viewportH / zoom);
-    setSize (juce::jmax (layoutW, fillW), juce::jmax (layoutH, fillH));
+    setSize (juce::jmax ((int) std::ceil (content.getRight()) + nodeSlot, fillW),
+             juce::jmax ((int) std::ceil (content.getBottom()) + cardHeight / 2, fillH));
     resized();
 }
 
@@ -282,25 +245,10 @@ juce::Rectangle<int> CanvasView::getContentBounds() const
 }
 
 //== Geometry ==================================================================
-// Normalised positions map over the LAYOUT area (zoom-independent), so zooming never
-// moves a node and place <-> persist stay consistent.
-juce::Point<int> CanvasView::centreForNorm (float nx, float ny) const
-{
-    const int x = marginX + juce::roundToInt (juce::jlimit (0.0f, 1.0f, nx) * (float) (layoutW - 2 * marginX));
-    const int y = marginY + juce::roundToInt (juce::jlimit (0.0f, 1.0f, ny) * (float) (layoutH - 2 * marginY));
-    return { x, y };
-}
-
-juce::Point<float> CanvasView::normForCentre (juce::Point<int> centre) const
-{
-    const float nx = (float) (centre.x - marginX) / (float) (layoutW - 2 * marginX);
-    const float ny = (float) (centre.y - marginY) / (float) (layoutH - 2 * marginY);
-    return { juce::jlimit (0.0f, 1.0f, nx), juce::jlimit (0.0f, 1.0f, ny) };
-}
-
+// Stored positions are the node centre in logical px, so place <-> persist are exact inverses.
 void CanvasView::placeNode (juce::Component& c, const juce::String& uid)
 {
-    const auto centre = centreForNorm (controller.getNodeX (uid), controller.getNodeY (uid));
+    const juce::Point<int> centre { juce::roundToInt (controller.getNodeX (uid)), juce::roundToInt (controller.getNodeY (uid)) };
     c.setBounds (juce::Rectangle<int> (c.getWidth(), c.getHeight()).withCentre (centre));
 }
 
@@ -309,11 +257,21 @@ void CanvasView::moveNodeBy (const juce::String& uid, juce::Point<int> delta)
     if (const auto* v = viewForUid (uid))
     {
         auto* c = v->comp;
-        // Clamp to the layout area (not the zoomed-out filler), so the persisted
-        // normalised position reproduces exactly where the node was dropped.
-        int x = juce::jlimit (0, layoutW - c->getWidth(),  c->getX() + delta.x);
-        int y = juce::jlimit (0, layoutH - c->getHeight(), c->getY() + delta.y);
+        // Top-left stays on the canvas and the centre within the document's coordinate range.
+        const int maxCoord = (int) lighthost::geometry::kMaxCoord;
+        const int x = juce::jlimit (0, maxCoord - c->getWidth()  / 2, c->getX() + delta.x);
+        const int y = juce::jlimit (0, maxCoord - c->getHeight() / 2, c->getY() + delta.y);
         c->setTopLeftPosition (x, y);
+
+        // Past the right / bottom edge the canvas grows live (it only shrinks again on drop). The
+        // document still holds the old position until then, so resized() must not re-place nodes.
+        const int needW = c->getRight()  + lighthost::geometry::nodeSlot;
+        const int needH = c->getBottom() + lighthost::geometry::cardHeight / 2;
+        if (needW > getWidth() || needH > getHeight())
+        {
+            const juce::ScopedValueSetter<bool> hold (suppressPlacement, true);
+            setSize (juce::jmax (getWidth(), needW), juce::jmax (getHeight(), needH));
+        }
         repaint();                  // redraw cables to follow the node live
     }
 }
@@ -322,8 +280,9 @@ void CanvasView::persistNodePosition (const juce::String& uid)
 {
     if (const auto* v = viewForUid (uid))
     {
-        const auto norm = normForCentre (v->comp->getBounds().getCentre());
-        controller.setNodePosition (uid, norm.x, norm.y);
+        const auto centre = v->comp->getBounds().getCentre();
+        controller.setNodePosition (uid, (float) centre.x, (float) centre.y);
+        applyCanvasSize();          // full recompute: the canvas may shrink back after a drop
     }
 }
 
@@ -667,6 +626,8 @@ bool CanvasView::keyPressed (const juce::KeyPress& key)
 //== Layout ====================================================================
 void CanvasView::resized()
 {
+    if (suppressPlacement)
+        return;
     for (const auto& v : views)
         placeNode (*v.comp, v.uid);
 }
@@ -678,16 +639,6 @@ void CanvasView::paint (juce::Graphics& g)
                              LightHostLookAndFeel::appBgBottom(), (float) getWidth() * 0.5f, (float) getHeight(), true);
     g.setGradientFill (bg);
     g.fillAll();
-
-    // Zoomed out, the canvas is larger than the layout area nodes can be placed in:
-    // shade the filler so the boundary is visible.
-    if (getWidth() > layoutW || getHeight() > layoutH)
-    {
-        juce::RectangleList<int> filler (getLocalBounds());
-        filler.subtract ({ 0, 0, layoutW, layoutH });
-        g.setColour (juce::Colours::black.withAlpha (0.28f));
-        g.fillRectList (filler);
-    }
 
     const auto cables = buildCables();
     std::optional<Cable> sel;

@@ -3,9 +3,9 @@
 //
 //  A thin wrapper around a ValueTree:
 //
-//  <GRAPH version="1">
+//  <GRAPH version="2">
 //    <NODES>
-//      <NODE uid="…" type="audioIn"|"audioOut"|"plugin" name="…" x="0.5" y="0.5"
+//      <NODE uid="…" type="audioIn"|"audioOut"|"plugin" name="…" x="400" y="260"
 //            bypassed="0" state="base64…">        (state/PLUGIN only for type="plugin")
 //        <PLUGIN …/>                              (PluginDescription XML)
 //      </NODE>
@@ -14,6 +14,9 @@
 //      <CONNECTION srcUid="…" srcCh="0" dstUid="…" dstCh="0"/>
 //    </CONNECTIONS>
 //  </GRAPH>
+//
+//  x / y are the node's CENTRE in logical canvas px at 100 % zoom (version 2; version 1 stored them
+//  normalised 0..1 and is migrated on load by migrateTree).
 //
 //  Nodes carry stable UUIDs, so two instances of the same plugin never collide
 //  (the legacy PropertiesFile keyed by name+version+format could not do this).
@@ -29,7 +32,9 @@ class GraphDocument
 public:
     GraphDocument();                                   // empty graph with audioIn/audioOut nodes
 
-    static GraphDocument fromXml (const String& xml);  // check isValid() on the result
+    static constexpr int currentVersion = 2;
+
+    static GraphDocument fromXml (const String& xml);  // check isValid() on the result; migrates v1 -> v2
     String toXml() const;
     bool isValid() const;
 
@@ -93,6 +98,12 @@ public:
     // (pluginListActive + plugin-order-*/plugin-bypass-*/plugin-state-*).
     // Returns an empty default document if there is nothing to migrate.
     static GraphDocument migrateFromLegacySettings (PropertiesFile&);
+
+    // One-time v1 (normalised positions) -> v2 (px) migration of a GRAPH tree, shared by documents and
+    // presets. Returns true if it changed anything; idempotent; a newer version is left untouched.
+    static bool migrateTree (ValueTree& graph);
+
+    bool migratedOnLoad = false;   // set by fromXml when the loaded tree was a v1 document
 
     ValueTree state;   // the GRAPH tree; public for future GUI/undo binding
 

@@ -1,6 +1,7 @@
 #include "GraphController.h"
 #include "../PluginWindow.h"
 #include "SettingsBackup.h"
+#include "NodeGeometry.h"
 
 GraphController::GraphController (AudioProcessorGraph& g, AudioPluginFormatManager& fm)
     : graph (g), formatManager (fm)
@@ -19,6 +20,7 @@ void GraphController::loadFrom (PropertiesFile& settings)
         GraphDocument doc = GraphDocument::fromXml (xml);
         if (doc.isValid())
         {
+            migratedOnLoad = doc.migratedOnLoad;
             document = std::move (doc);
             loaded = true;
         }
@@ -408,14 +410,15 @@ std::vector<GraphController::ChainItem> GraphController::getChain() const
     return result;
 }
 
-// Place a new node to the right of the current rightmost plugin, then walk down
-// (and finally left) past any occupied slot — two cards must never land on the
-// same spot, or the later one is invisible (positions are otherwise user-owned).
+// Place a new node one slot right of the current rightmost plugin (or of IN), then walk down past any
+// card it would overlap, so two cards never land on the same spot. Positions are node centres in px.
 juce::Point<float> GraphController::placementForNewNode() const
 {
+    using namespace lighthost::geometry;
     ValueTree nodes = document.getNodes();
 
-    float maxX = 0.15f;
+    float maxX = 0.0f;
+    float anchorY = defaultY;
     bool  anyPlugin = false;
     for (int i = 0; i < nodes.getNumChildren(); ++i)
     {
@@ -424,38 +427,35 @@ juce::Point<float> GraphController::placementForNewNode() const
         {
             // Positions go through the document accessors so the default for a node
             // without x/y lives in one place (GraphDocument::getNodeX/getNodeY).
-            maxX = jmax (maxX, document.getNodeX (n.getProperty ("uid").toString()));
+            const String uid = n.getProperty ("uid").toString();
+            if (! anyPlugin || document.getNodeX (uid) > maxX)
+            {
+                maxX = document.getNodeX (uid);
+                anchorY = document.getNodeY (uid);
+            }
             anyPlugin = true;
         }
     }
 
-    const auto occupied = [this, &nodes] (float px, float py)
+    const auto occupied = [this, &nodes] (juce::Point<float> c)
     {
+        const auto want = nodeRect (false, c).expanded ((float) nodeGap * 0.5f);
         for (int i = 0; i < nodes.getNumChildren(); ++i)
         {
             const auto n = nodes.getChild (i);
             if (n.getProperty ("type").toString() != GraphDocument::typePlugin)
                 continue;
             const String uid = n.getProperty ("uid").toString();
-            if (std::abs (document.getNodeX (uid) - px) < 0.05f
-             && std::abs (document.getNodeY (uid) - py) < 0.05f)
+            if (want.intersects (nodeRect (false, { document.getNodeX (uid), document.getNodeY (uid) })))
                 return true;
         }
         return false;
     };
 
-    float x = anyPlugin ? jmin (0.9f, maxX + 0.12f) : 0.3f;
-    float y = 0.5f;
-    for (int guard = 0; guard < 64 && occupied (x, y); ++guard)
-    {
-        y += 0.12f;                                     // cascade down…
-        if (y > 0.9f)
-        {
-            y = 0.1f;                                   // …then wrap to the top
-            x = jmax (0.1f, x - 0.06f);                 // one half-step left per column
-        }
-    }
-    return { x, y };
+    juce::Point<float> p { (anyPlugin ? maxX : defaultInX) + (float) nodeSlot, anchorY };
+    for (int guard = 0; guard < 64 && occupied (p); ++guard)
+        p.y += (float) (cardHeight + nodeGap);
+    return { jmin (p.x, kMaxCoord), jmin (p.y, kMaxCoord) };
 }
 
 String GraphController::addPlugin (const PluginDescription& desc)
@@ -1150,6 +1150,7 @@ bool GraphController::nodeAcceptsMidi (const String& uid) const
 void GraphController::loadDocument (const GraphDocument& doc)
 {
     document.state = doc.state.createCopy();   // deep copy: never share the store's tree
+    GraphDocument::migrateTree (document.state);   // safety net: a v1 tree must never reach the canvas
     rebuild();
 }
 

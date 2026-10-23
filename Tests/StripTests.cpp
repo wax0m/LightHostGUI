@@ -148,8 +148,14 @@ int runStripTests (int& checks)
         check (checks, doc.getMix (uid) == 1.0f, "document: NaN mix reads back as 1");
         doc.setGain (uid, 1000.0f);
         check (checks, doc.getGain (uid) == 2.0f, "document: setGain clamps");
-        doc.getNodeByUid (uid).setProperty ("x", 7.0f, nullptr);
-        check (checks, doc.getNodeX (uid) == 1.0f, "document: node x clamped to 0..1");
+        doc.getNodeByUid (uid).setProperty ("x", 1.0e9f, nullptr);
+        check (checks, doc.getNodeX (uid) == 20000.0f, "document: node x clamped to 20000");
+        doc.getNodeByUid (uid).setProperty ("x", -5.0f, nullptr);
+        check (checks, doc.getNodeX (uid) == 0.0f, "document: node x below 0 reads back as 0");
+        doc.getNodeByUid (uid).setProperty ("x", nan, nullptr);
+        check (checks, doc.getNodeX (uid) == 400.0f, "document: NaN node x reads back as the fallback");
+        doc.getNodeByUid (uid).setProperty ("y", nan, nullptr);
+        check (checks, doc.getNodeY (uid) == 260.0f, "document: NaN node y reads back as the fallback");
 
         NodeStripProcessor s;
         s.setGain (nan);

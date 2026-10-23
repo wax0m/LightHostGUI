@@ -5,6 +5,7 @@
 #include "SelfTest.h"
 #include "GraphController.h"
 #include "PresetStore.h"
+#include "NodeGeometry.h"
 
 using namespace juce;
 
@@ -1075,9 +1076,9 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         const String uid2 = controller.appendToChain (pA);   // two instances of pA is fine
         r.expect (uid1.isNotEmpty() && uid2.isNotEmpty(), "two plugins instantiated");
 
-        // Distinct, non-default positions (getNodeX/Y default to 0.5f, so avoid 0.5).
-        controller.setNodePosition (uid1, 0.1f, 0.2f);
-        controller.setNodePosition (uid2, 0.8f, 0.9f);
+        // Distinct, non-default positions (px; the fallback for a missing position is (400, 260)).
+        controller.setNodePosition (uid1, 300.0f, 200.0f);
+        controller.setNodePosition (uid2, 900.0f, 500.0f);
 
         // A structural edit: add a third node then remove it.
         const String uid3 = controller.appendToChain (pA);
@@ -1085,9 +1086,9 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         controller.removeNode (uid3);
 
         const auto eq = [] (float a, float b) { return std::abs (a - b) < 1.0e-6f; };
-        r.expect (eq (controller.getNodeX (uid1), 0.1f) && eq (controller.getNodeY (uid1), 0.2f),
+        r.expect (eq (controller.getNodeX (uid1), 300.0f) && eq (controller.getNodeY (uid1), 200.0f),
                   "node 1 position unchanged after append + remove");
-        r.expect (eq (controller.getNodeX (uid2), 0.8f) && eq (controller.getNodeY (uid2), 0.9f),
+        r.expect (eq (controller.getNodeX (uid2), 900.0f) && eq (controller.getNodeY (uid2), 500.0f),
                   "node 2 position unchanged after append + remove");
 
         controller.save (*settings);
@@ -1437,8 +1438,8 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     // Test O (cont.) — placement reads positions through the document accessors, so a node
-    //          that has no x/y property is treated as sitting at the accessor default
-    //          (0.5, 0.5) and a new add never lands on top of it.
+    //          that has no x/y property is treated as sitting at the accessor fallback
+    //          (400, 260 px) and a new add never lands on top of it.
     {
         GraphFixture fx (formatManager, "placementdefault");
         GraphController& controller = *fx.controller;
@@ -1447,17 +1448,18 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         const String b = controller.addNodeUnconnected (pA);
         r.expect (a.isNotEmpty() && b.isNotEmpty(), "placement-default plugins instantiated");
 
-        // a sits at x = 0.38, so the next add would target x = 0.5; b has no position at all
-        // and is therefore at the default (0.5, 0.5) — exactly where that add would land.
-        controller.setNodePosition (a, 0.38f, 0.2f);
+        // b has no position at all and is therefore at the fallback (400, 260); a sits one slot
+        // to its left, so the next add must still keep clear of both.
+        controller.setNodePosition (a, 130.0f, 260.0f);
         ValueTree bTree = controller.document.getNodeByUid (b);
         bTree.removeProperty ("x", nullptr);
         bTree.removeProperty ("y", nullptr);
 
         const String c = controller.addNodeUnconnected (pA);
         r.expect (c.isNotEmpty(), "third plugin instantiated");
-        const bool onTopOfB = std::abs (controller.getNodeX (c) - 0.5f) < 0.05f
-                           && std::abs (controller.getNodeY (c) - 0.5f) < 0.05f;
+        const auto rectOf = [&] (const String& uid)
+        { return lighthost::geometry::nodeRect (false, { controller.getNodeX (uid), controller.getNodeY (uid) }); };
+        const bool onTopOfB = rectOf (c).intersects (rectOf (b)) || rectOf (c).intersects (rectOf (a));
         r.expect (! onTopOfB, "a new node does not land on a node that has no stored position");
 
     }

@@ -98,6 +98,11 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
     // Presets: load the store, or seed a "Default" from the just-loaded graph.
     loadPresets();
 
+    // A v1.0 build would read a v2 graph as px values clamped to 1 (every node bottom-right), so keep the
+    // v1 file once, before the first save can rewrite it. No dialog: the migration itself is lossless.
+    if (controller.didMigrateOnLoad() || store.migratedOnLoad)
+        lighthost::copySettingsFileAside (*getAppProperties().getUserSettings(), "v1");
+
     // One non-modal notice for whatever could not be read (the backups are already written).
     const auto warning = (startupWarning + "\n\n" + controller.getLoadWarning() + "\n\n" + presetsWarning).trim();
     if (warning.isNotEmpty())
