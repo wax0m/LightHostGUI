@@ -25,6 +25,7 @@
 //    Q. an explicit retry swaps a missing plugin's stand-in for the real plugin.
 //    R. exactly one output guard in the live graph; corrupt persisted gain is clamped.
 //    S. an unreadable saved graph is backed up and reported, never silently overwritten.
+//    T. replacing a plugin in place keeps wiring and strip, imports a VST2 state, publishes once.
 //
 //  Used by both the LightHostRuntimeTests console target and the shipping app's
 //  `-run-selftest` command-line switch, so CI can verify the real binary.

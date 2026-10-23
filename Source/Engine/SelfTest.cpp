@@ -1691,6 +1691,107 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
+    // Test T — replace a plugin in place (v1.2 A). A VST2 stand-in carrying a synthetic FxBk
+    //          bank is wired IN -> stand-in -> OUT with non-default gain / pan / mix / bypass,
+    //          then replaced by a real VST3: same uid and wiring, strip values kept, real
+    //          plugin live, the original state kept once, parameters imported by position,
+    //          exactly one publish. A replacement that can't load changes and publishes nothing.
+    //==========================================================================
+    std::cout << "\n[T] replace plugin in place" << std::endl;
+    {
+        GraphFixture fx (formatManager, "replaceplugin");
+        GraphController& controller = *fx.controller;
+
+        // Synthetic VST2 bank: 1 program, 4 params.
+        const std::vector<float> wanted { 0.25f, 0.5f, 0.75f, 1.0f };
+        MemoryBlock bank;
+        {
+            const auto be = [&bank] (uint32_t v) { for (int s = 24; s >= 0; s -= 8) { const uint8_t b = (uint8_t) (v >> s); bank.append (&b, 1); } };
+            const auto tag = [&bank] (const char* t) { bank.append (t, 4); };
+            tag ("CcnK"); be (0); tag ("FxBk"); be (2); be (0x4c484f54); be (1); be (1); be (0);
+            while (bank.getSize() < 156) { const uint8_t z = 0; bank.append (&z, 1); }
+            tag ("CcnK"); be (0); tag ("FxCk"); be (1); be (0x4c484f54); be (1); be ((uint32_t) wanted.size());
+            char name[28] = {}; std::memcpy (name, "Synthetic", 9);
+            bank.append (name, 28);
+            for (float f : wanted) { uint32_t u; std::memcpy (&u, &f, 4); be (u); }
+        }
+
+        PluginDescription oldVst2 = pA;
+        oldVst2.name             = "OldVst2Plugin";
+        oldVst2.pluginFormatName = "VST";
+        oldVst2.fileOrIdentifier = File::getSpecialLocation (File::tempDirectory)
+                                       .getChildFile ("lighthost_no_such_plugin_vst2.dll").getFullPathName();
+
+        const String uid = controller.appendToChain (oldVst2);
+        r.expect (uid.isNotEmpty() && controller.isMissing (uid), "replace-test stand-in created");
+        controller.document.setPluginState (uid, bank.toBase64Encoding());
+        controller.setNodeGain (uid, 0.7f);
+        controller.setNodePan (uid, 0.3f);
+        controller.setNodeMix (uid, 0.6f);
+        controller.setBypassed (uid, true);
+
+        const auto sameEdges = [] (const std::vector<GraphController::Connection>& a, const std::vector<GraphController::Connection>& b)
+        {
+            if (a.size() != b.size()) return false;
+            for (size_t i = 0; i < a.size(); ++i)
+                if (a[i].srcUid != b[i].srcUid || a[i].srcCh != b[i].srcCh || a[i].dstUid != b[i].dstUid || a[i].dstCh != b[i].dstCh)
+                    return false;
+            return true;
+        };
+        const auto edgesBefore = controller.getConnections();
+
+        // 1. A replacement that can't load: !ok, nothing changes, nothing publishes.
+        PluginDescription bogus = pA;
+        bogus.name             = "DeliberatelyMissing";
+        bogus.fileOrIdentifier = File::getSpecialLocation (File::tempDirectory)
+                                     .getChildFile ("lighthost_no_such_plugin_zzz.vst3").getFullPathName();
+        const String docBefore = controller.document.toXml();
+        int before = controller.getPublishCount();
+        r.expect (! controller.replacePlugin (uid, bogus).ok, "replace with an unloadable plugin fails");
+        r.expect (controller.getPublishCount() == before, "failed replace publishes nothing");
+        r.expect (controller.document.toXml() == docBefore, "failed replace leaves the document untouched");
+        r.expect (controller.isMissing (uid), "failed replace keeps the stand-in");
+
+        // 2. Replace by a real VST3.
+        before = controller.getPublishCount();
+        const auto res = controller.replacePlugin (uid, pA);
+        r.expect (res.ok, "replace by a real plugin succeeds");
+        r.expect (controller.getPublishCount() - before == 1, "a successful replace publishes exactly once");
+        r.expect (! controller.isMissing (uid), "replaced node is no longer a stand-in");
+        auto* node = controller.getNodeForUid (uid);
+        r.expect (node != nullptr && dynamic_cast<PassThroughProcessor*> (node->getProcessor()) == nullptr,
+                  "replaced node runs the real plugin");
+        r.expect (node != nullptr && node->isBypassed(), "replaced node keeps its bypass flag");
+        r.expect (sameEdges (edgesBefore, controller.getConnections()), "replace keeps the wiring");
+        r.expect (controller.getNodeGain (uid) == 0.7f && controller.getNodePan (uid) == 0.3f
+                  && std::abs (controller.getNodeMix (uid) - 0.6f) < 1.0e-6f, "replace keeps gain / pan / mix");
+        r.expect (controller.getNodeMeter (uid) != nullptr, "replaced node has its strip meter again");
+        r.expect (controller.document.getPreviousPluginState (uid) == bank.toBase64Encoding(),
+                  "the original VST2 state is kept as prevState");
+        const auto newDesc = GraphDocument::getPluginDescription (controller.document.getNodeByUid (uid));
+        r.expect (newDesc.has_value() && newDesc->pluginFormatName == pA.pluginFormatName, "document holds the new description");
+
+        // 3. Import: parameters by position (pA is VST3 and has a few parameters).
+        if (pA.pluginFormatName == "VST3" && controller.getNodeParameters (uid, false).size() >= 2)
+        {
+            r.expect (res.import == GraphController::ReplaceResult::Import::paramsByIndex, "a params bank imports by position");
+            r.expect (res.changedParams >= 1 && res.changedParams <= (int) wanted.size(), "import reports a plausible changed count");
+            r.expect (res.message.isNotEmpty(), "replace reports a one-line result");
+        }
+
+        // 4. Replacing again keeps the FIRST original, and works on a live plugin (no import).
+        before = controller.getPublishCount();
+        const auto again = controller.replacePlugin (uid, pA);
+        r.expect (again.ok && again.import == GraphController::ReplaceResult::Import::none, "live-to-live replace works without import");
+        r.expect (controller.getPublishCount() - before == 1, "second replace publishes exactly once");
+        r.expect (controller.document.getPreviousPluginState (uid) == bank.toBase64Encoding(),
+                  "a second replace keeps the first prevState");
+        r.expect (sameEdges (edgesBefore, controller.getConnections()), "second replace keeps the wiring");
+
+        controller.save (*fx.settings);
+    }
+
+    //==========================================================================
     std::cout << "\n" << (r.failures == 0 ? "PASS " : "FAIL ")
               << (r.checks - r.failures) << "/" << r.checks << " checks" << std::endl;
     std::cout.flush();

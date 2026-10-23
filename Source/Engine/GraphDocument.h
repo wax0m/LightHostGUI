@@ -8,6 +8,8 @@
 //      <NODE uid="…" type="audioIn"|"audioOut"|"plugin" name="…" x="400" y="260"
 //            bypassed="0" state="base64…">        (state/PLUGIN only for type="plugin")
 //        <PLUGIN …/>                              (PluginDescription XML)
+//        <PREV_PLUGIN …/>                         (description before the first Replace; kept with
+//                                                  prevState="base64…", both written once, never overwritten)
 //      </NODE>
 //    </NODES>
 //    <CONNECTIONS>
@@ -71,6 +73,17 @@ public:
     void clearAllPluginStates();
 
     static std::optional<PluginDescription> getPluginDescription (const ValueTree& node);
+
+    // Replace a plugin node's implementation in place (uid, wiring, strip, position, flags stay).
+    // Sets PLUGIN + name + state; the first replace also keeps the original description and state
+    // (PREV_PLUGIN + prevState) and later replaces never overwrite them. False for a non-plugin uid.
+    bool replacePlugin (const String& uid, const PluginDescription& newDesc,
+                        const String& newStateBase64, const String& originalStateBase64);
+    String getPreviousPluginState (const String& uid) const;   // prevState, "" if never replaced
+
+    // Key of a pre-2026 PropertiesFile entry: "plugin-<type>-<name><version><format>"
+    // (type = order | bypass | state), e.g. plugin-state-TAL-Dub-3V1.1.0VST.
+    static String legacyKey (const String& type, const PluginDescription&);
 
     //==============================================================================
     void addConnection (const String& srcUid, int srcCh, const String& dstUid, int dstCh);

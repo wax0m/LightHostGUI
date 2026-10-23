@@ -21,6 +21,7 @@ namespace
     const Identifier idY           ("y");
     const Identifier idBypassed    ("bypassed");
     const Identifier idState       ("state");
+    const Identifier idPrevState   ("prevState");
     const Identifier idGain        ("gain");
     const Identifier idPan         ("pan");
     const Identifier idMidi        ("midi");
@@ -211,6 +212,41 @@ std::optional<PluginDescription> GraphDocument::getPluginDescription (const Valu
             return desc;
     }
     return std::nullopt;
+}
+
+bool GraphDocument::replacePlugin (const String& uid, const PluginDescription& newDesc,
+                                   const String& newStateBase64, const String& originalStateBase64)
+{
+    ValueTree node = getNodeByUid (uid);
+    if (! node.isValid() || node.getProperty (idType).toString() != typePlugin)
+        return false;
+
+    ValueTree old = node.getChildWithName ("PLUGIN");
+    if (! node.getChildWithName ("PREV_PLUGIN").isValid() && old.isValid())
+    {
+        // First replace: keep the original so a later replace can never lose it.
+        if (auto oldXml = old.createXml())
+        {
+            oldXml->setTagName ("PREV_PLUGIN");
+            node.appendChild (ValueTree::fromXml (*oldXml), nullptr);
+        }
+        if (originalStateBase64.isNotEmpty())
+            node.setProperty (idPrevState, originalStateBase64, nullptr);
+    }
+
+    if (old.isValid())
+        node.removeChild (old, nullptr);
+    if (auto descXml = newDesc.createXml())
+        node.appendChild (ValueTree::fromXml (*descXml), nullptr);
+
+    node.setProperty (idName, newDesc.name, nullptr);
+    node.setProperty (idState, newStateBase64, nullptr);
+    return true;
+}
+
+String GraphDocument::getPreviousPluginState (const String& uid) const
+{
+    return getNodeByUid (uid).getProperty (idPrevState).toString();
 }
 
 //==============================================================================
@@ -507,6 +543,11 @@ bool GraphDocument::migrateTree (ValueTree& graph)
     return true;
 }
 
+String GraphDocument::legacyKey (const String& type, const PluginDescription& p)
+{
+    return "plugin-" + type + "-" + p.name + p.version + p.pluginFormatName;
+}
+
 //==============================================================================
 GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings)
 {
@@ -516,15 +557,10 @@ GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings
     if (auto xml = settings.getXmlValue ("pluginListActive"))
         legacyActive.recreateFromXml (*xml);
 
-    const auto legacyKey = [] (const String& type, const PluginDescription& p)
-    {
-        return "plugin-" + type + "-" + p.name + p.version + p.pluginFormatName;
-    };
-
     const auto types = legacyActive.getTypes();
     std::vector<std::pair<int, PluginDescription>> ordered;
     for (const auto& p : types)
-        ordered.push_back ({ settings.getValue (legacyKey ("order", p)).getIntValue(), p });
+        ordered.push_back ({ settings.getValue (GraphDocument::legacyKey ("order", p)).getIntValue(), p });
     std::sort (ordered.begin(), ordered.end(),
                [] (const auto& a, const auto& b) { return a.first < b.first; });
 
@@ -536,8 +572,8 @@ GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings
         ignoreUnused (orderTime);
         const float x = lighthost::geometry::defaultInX + (float) ((index + 1) * lighthost::geometry::nodeSlot);
         const String uid = doc.addPluginNode (plugin, x, lighthost::geometry::defaultY);
-        doc.setBypassed (uid, settings.getBoolValue (legacyKey ("bypass", plugin), false));
-        const String stateB64 = settings.getValue (legacyKey ("state", plugin));
+        doc.setBypassed (uid, settings.getBoolValue (GraphDocument::legacyKey ("bypass", plugin), false));
+        const String stateB64 = settings.getValue (GraphDocument::legacyKey ("state", plugin));
         if (stateB64.isNotEmpty())
             doc.setPluginState (uid, stateB64);
         chain.push_back (uid);

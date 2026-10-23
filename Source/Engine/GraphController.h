@@ -81,6 +81,23 @@ public:
     bool retryMissingPlugin (const String& uid);   // true when the plugin is live again
     int  retryMissingPlugins();                     // number recovered; one publish for all
 
+    // Replace a plugin node's implementation in place: same uid, wiring, strip, position, bypass,
+    // gain/pan/mix and MIDI flag. A saved VST2 state (fxb/fxp) on the node, or in `fallbackState`
+    // when the node has none, is imported into the new VST3 on the fresh instance before it enters
+    // the graph. Works on stand-ins and on live plugins (then without import). The original
+    // description and state are kept once in the document (PREV_PLUGIN / prevState).
+    // If the new plugin can't load: !ok, nothing changes, nothing publishes. Otherwise exactly one publish.
+    struct ReplaceResult
+    {
+        enum class Import { none, fullStream, bareChunk, paramsByIndex };
+        bool ok = false;
+        Import import = Import::none;
+        int changedParams = 0;
+        String message;   // one line for the UI
+    };
+    ReplaceResult replacePlugin (const String& uid, const PluginDescription& newDesc,
+                                 const MemoryBlock* fallbackState = nullptr);
+
     //==============================================================================
     // Master meter taps for the GUI (message-thread reads). Null until the first
     // rebuild, or if the corresponding IO node is absent. Meters are spliced into
@@ -183,6 +200,7 @@ private:
     // uidToNodeId. Shared by rebuildNow and the incremental add paths.
     AudioProcessorGraph::Node* addPluginNodeToGraph (const ValueTree& nodeTree);
     std::unique_ptr<AudioProcessor> createPluginInstanceFor (const ValueTree& nodeTree);   // nullptr if it can't load
+    std::unique_ptr<AudioProcessor> createInstanceFrom (const PluginDescription&);        // stereo-forced, default state; nullptr if it can't load
     AudioProcessorGraph::Node* registerPluginNode (const ValueTree& nodeTree, std::unique_ptr<AudioProcessor> instance);
     // Teardown mirror of addPluginNodeToGraph: every per-uid runtime map is cleaned here.
     void removePluginNodeFromGraph (const String& uid);

@@ -3,6 +3,7 @@
 #include "SettingsBackup.h"
 #include "NodeGeometry.h"
 #include "NodePlacement.h"
+#include "Vst2State.h"
 
 GraphController::GraphController (AudioProcessorGraph& g, AudioPluginFormatManager& fm)
     : graph (g), formatManager (fm)
@@ -257,6 +258,21 @@ AudioProcessorGraph::Node* GraphController::addPluginNodeToGraph (const ValueTre
     return registerPluginNode (nodeTree, createPluginInstanceFor (nodeTree));
 }
 
+// Instantiate a plugin from its description and promote mono-defaulting plugins
+// (e.g. MAutoPitch) to stereo before any state is restored, so they don't collapse
+// a channel in the stereo chain. Touches nothing but the new instance.
+std::unique_ptr<AudioProcessor> GraphController::createInstanceFrom (const PluginDescription& desc)
+{
+    String errorMessage;
+    auto created = formatManager.createPluginInstance (desc, graph.getSampleRate(),
+                                                       graph.getBlockSize(), errorMessage);
+    if (created == nullptr)
+        return nullptr;
+
+    lighthost::buses::forceStereo (*created, graph.getSampleRate(), graph.getBlockSize());
+    return std::unique_ptr<AudioProcessor> (std::move (created));
+}
+
 // Create the hosted plugin for a document node (stereo-forced, saved state
 // restored), or nullptr when it can't be loaded. Touches nothing but the new
 // instance, so the retry path can call it before deciding to change the graph.
@@ -266,15 +282,9 @@ std::unique_ptr<AudioProcessor> GraphController::createPluginInstanceFor (const 
     if (! desc.has_value())
         return nullptr;
 
-    String errorMessage;
-    auto created = formatManager.createPluginInstance (*desc, graph.getSampleRate(),
-                                                       graph.getBlockSize(), errorMessage);
+    auto created = createInstanceFrom (*desc);
     if (created == nullptr)
         return nullptr;
-
-    // Promote mono-defaulting plugins (e.g. MAutoPitch) to stereo before
-    // restoring state, so they don't collapse a channel in the stereo chain.
-    lighthost::buses::forceStereo (*created, graph.getSampleRate(), graph.getBlockSize());
 
     const String stateB64 = nodeTree.getProperty ("state").toString();
     MemoryBlock stateBinary;
@@ -370,6 +380,145 @@ int GraphController::retryMissingPlugins()
     if (recovered > 0)
         rewireConnections();   // one publish for the whole batch
     return recovered;
+}
+
+//==============================================================================
+namespace
+{
+    std::vector<float> readParamValues (AudioProcessor& p)
+    {
+        std::vector<float> v;
+        for (auto* param : p.getParameters())
+            v.push_back (param->getValue());
+        return v;
+    }
+
+    int countChanged (AudioProcessor& p, const std::vector<float>& baseline)
+    {
+        const auto& params = p.getParameters();
+        int n = 0;
+        for (int i = 0; i < params.size() && i < (int) baseline.size(); ++i)
+            if (std::abs (params[i]->getValue() - baseline[(size_t) i]) > 1.0e-4f)
+                ++n;
+        return n;
+    }
+
+    // Feed `wrapped` (a VST3PluginState) to the fresh instance; if no parameter moved, put the
+    // defaults back. A state-only change we can't see counts as failure.
+    int tryWrappedState (AudioProcessor& p, const MemoryBlock& wrapped, const MemoryBlock& defaultState,
+                         const std::vector<float>& defaults)
+    {
+        p.setStateInformation (wrapped.getData(), (int) wrapped.getSize());
+        const int n = countChanged (p, defaults);
+        if (n == 0)
+            p.setStateInformation (defaultState.getData(), (int) defaultState.getSize());
+        return n;
+    }
+
+    // Import a parsed VST2 state into a fresh (not yet graph-attached) VST3 instance.
+    void importVst2State (AudioProcessor& p, const lighthost::vst2::Blob& blob, const MemoryBlock& whole,
+                          GraphController::ReplaceResult& result)
+    {
+        using Import = GraphController::ReplaceResult::Import;
+        namespace v2 = lighthost::vst2;
+
+        MemoryBlock defaultState;
+        p.getStateInformation (defaultState);
+        const auto defaults = readParamValues (p);
+
+        if (blob.kind == v2::Kind::bankChunk || blob.kind == v2::Kind::programChunk)
+        {
+            int n = tryWrappedState (p, v2::wrapAsVst3State (whole.getData(), whole.getSize()), defaultState, defaults);
+            if (n > 0)
+                result.import = Import::fullStream;
+            else if ((n = tryWrappedState (p, v2::wrapAsVst3State (blob.chunk.getData(), blob.chunk.getSize()),
+                                           defaultState, defaults)) > 0)
+                result.import = Import::bareChunk;
+            result.changedParams = n;
+        }
+        else
+        {
+            auto* bypass = p.getBypassParameter();
+            const auto& params = p.getParameters();
+            const int count = jmin ((int) blob.params.size(), params.size());
+            for (int i = 0; i < count; ++i)
+            {
+                auto* param = params[i];
+                if (param->isMetaParameter() || param == bypass)
+                    continue;
+                param->setValueNotifyingHost (jlimit (0.0f, 1.0f, blob.params[(size_t) i]));   // host side, like the param bridge
+            }
+            result.changedParams = countChanged (p, defaults);
+            if (result.changedParams > 0)
+                result.import = Import::paramsByIndex;
+        }
+    }
+}
+
+GraphController::ReplaceResult GraphController::replacePlugin (const String& uid, const PluginDescription& newDesc,
+                                                               const MemoryBlock* fallbackState)
+{
+    ReplaceResult result;
+
+    ValueTree nodeTree = document.getNodeByUid (uid);
+    if (! nodeTree.isValid() || nodeTree.getProperty ("type").toString() != GraphDocument::typePlugin)
+    {
+        result.message = "Not a plugin node";
+        return result;
+    }
+
+    // Instantiate FIRST: a plugin that can't load leaves the document and the graph untouched.
+    auto instance = createInstanceFrom (newDesc);
+    if (instance == nullptr)
+    {
+        result.message = "Could not load " + newDesc.name;
+        return result;
+    }
+
+    // Source state: a live plugin's current state, else the saved one (stand-ins never hold it),
+    // else the caller's fallback (the legacy settings key).
+    MemoryBlock source;
+    if (auto* live = isMissing (uid) ? nullptr : getNodeForUid (uid))
+        live->getProcessor()->getStateInformation (source);
+    else
+        source.fromBase64Encoding (nodeTree.getProperty ("state").toString());
+    if (source.isEmpty() && fallbackState != nullptr)
+        source = *fallbackState;
+
+    std::optional<lighthost::vst2::Blob> vst2;
+    if (newDesc.pluginFormatName == "VST3" && ! source.isEmpty())
+        vst2 = lighthost::vst2::parse (source.getData(), source.getSize());
+
+    if (vst2.has_value())
+    {
+        importVst2State (*instance, *vst2, source, result);
+        result.message = result.import == ReplaceResult::Import::paramsByIndex
+                             ? String (CharPointer_UTF8 ("Parameters copied by position \xe2\x80\x94 check by ear"))
+                         : result.import != ReplaceResult::Import::none
+                             ? String ("Settings imported")
+                             : String (CharPointer_UTF8 ("Defaults loaded \xe2\x80\x94 the original settings stay saved with the preset"));
+    }
+    else
+    {
+        result.message = source.isEmpty() ? "Plugin replaced" : "Plugin replaced, the new plugin starts at its defaults";
+    }
+
+    MemoryBlock newState;
+    instance->getStateInformation (newState);
+    if (! document.replacePlugin (uid, newDesc, newState.toBase64Encoding(), source.toBase64Encoding()))
+    {
+        result = {};
+        result.message = "Not a plugin node";
+        return result;
+    }
+
+    // Same swap as the missing-plugin recovery; removal also closes the node's editor window.
+    removePluginNodeFromGraph (uid);
+    const bool registered = registerPluginNode (nodeTree, std::move (instance)) != nullptr;
+    jassert (registered);
+    rewireConnections();   // the one publish for this gesture
+    result.ok = registered;
+    return result;
 }
 
 void GraphController::captureStates()
