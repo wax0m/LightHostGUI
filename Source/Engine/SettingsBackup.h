@@ -1,5 +1,5 @@
 //
-//  SettingsBackup.h — keep a copy of a settings value that could not be parsed, so the
+//  SettingsBackup.h â€” keep a copy of a settings value that could not be parsed, so the
 //  next save (which writes the fallback defaults) can never destroy the user's data.
 //  Never deletes anything.
 //

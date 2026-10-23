@@ -1589,7 +1589,7 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
-    // Test R — output guard + sanitised values. Exactly one OutputGuardProcessor sits in
+    // Test R â€” output guard + sanitised values. Exactly one OutputGuardProcessor sits in
     //          the live graph after load and after a rewire (rewire must sweep the old
     //          one). A document whose node gain was corrupted to 1000 loads with the live
     //          strip at <= 2. The publish count per gesture is Test P's job and is
@@ -1640,7 +1640,7 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     //==========================================================================
-    // Test S — unreadable saved graph is backed up, never silently overwritten.
+    // Test S â€” unreadable saved graph is backed up, never silently overwritten.
     //          A broken "graphDocument" must leave a backup file + settings key holding the
     //          original text, start from a valid default document and set a warning;
     //          a valid document must produce neither a backup nor a warning.
