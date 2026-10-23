@@ -30,10 +30,6 @@ namespace lighthost
         return backup;
     }
 
-    // The whole settings file is unreadable (not well-formed XML), so PropertiesFile loaded nothing and the
-    // next save would overwrite it with defaults. Copies the file byte for byte to
-    //   <settings file name>-unreadable-<yyyyMMdd-HHmmss>
-    // nullopt = file absent or readable (nothing to do); File{} = unreadable but the copy failed; else the copy.
     // Copies the settings file byte for byte to <settings file name>-<label>-<yyyyMMdd-HHmmss>.
     // Returns the copy, or {} when there is no file or the copy failed.
     inline juce::File copySettingsFileAside (const juce::PropertiesFile& settings, const juce::String& label)
@@ -47,6 +43,10 @@ namespace lighthost
         return file.copyFileTo (copy) ? copy : juce::File();
     }
 
+    // The whole settings file is unreadable (not well-formed XML), so PropertiesFile loaded nothing and the
+    // next save would overwrite it with defaults. Copies the file byte for byte to
+    //   <settings file name>-unreadable-<yyyyMMdd-HHmmss>
+    // nullopt = file absent or readable (nothing to do); File{} = unreadable but the copy failed; else the copy.
     inline std::optional<juce::File> backupUnreadableSettingsFile (juce::PropertiesFile& settings)
     {
         if (! settings.getFile().existsAsFile() || settings.isValidFile())

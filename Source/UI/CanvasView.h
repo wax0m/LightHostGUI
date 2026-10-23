@@ -71,7 +71,7 @@ public:
     std::function<void()> onZoomReset;
     std::function<void()> onZoomFit;
 
-    void refresh();                 // rebuild node views from the document
+    void refresh (bool keepVisible = false);   // rebuild node views from the document; keepVisible: canvas never shrinks below the view
     void tick();                    // 60 fps: meters + flow animation
 
     // Told by the host the viewport's pixel size and the current zoom. The canvas is as large as
@@ -114,7 +114,7 @@ private:
     };
 
     void rebuildViews();
-    void applyCanvasSize();         // canvas size from the stored node positions, viewport and zoom
+    void applyCanvasSize (bool keepVisible = false);       // canvas size from the stored node positions, viewport and zoom
     void placeNode (juce::Component& c, const juce::String& uid);
     void moveNodeBy (const juce::String& uid, juce::Point<int> delta);
     void persistNodePosition (const juce::String& uid);

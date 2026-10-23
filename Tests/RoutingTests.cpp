@@ -203,6 +203,18 @@ int runRoutingTests (int& checks)
             check (checks, cardsClear, "placement: the stepped-down card overlaps no card");
         }
 
+        // Clearance is nodeGap on both sides: a card 30 px beyond the candidate's edge still blocks it (R3).
+        {
+            GraphDocument d;
+            const String in2 = d.getIoNodeUid (true), out2 = d.getIoNodeUid (false);
+            const String a = d.addPluginNode (fx ("A"), 400.0f, 260.0f);
+            const String near30 = d.addPluginNode (fx ("Near"), 400.0f + (float) nodeSlot + (float) lighthost::geometry::cardWidth + 30.0f, 260.0f);
+            wireChain (d, { in2, near30, a, out2 });
+            const auto p = lighthost::placeNewPlugin (d);
+            check (checks, near (p.centre.x, 400.0f + (float) nodeSlot) && p.centre.y > 260.0f + 100.0f,
+                   "placement: a card 30 px from the candidate still blocks it");
+        }
+
         // Branched graph: the anchor is the rightmost card.
         {
             GraphDocument d;

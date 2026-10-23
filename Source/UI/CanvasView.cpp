@@ -141,7 +141,7 @@ void CanvasView::rebuildViews()
                     if (safe == nullptr)
                         return;
                     safe->controller.removeNode (u);   // heals around the node; branches survive
-                    safe->refresh();
+                    safe->refresh (true);              // keep the view where it is: no jump after a delete
                 });
             };
             card->onRetry = [this] (const juce::String& u)
@@ -175,7 +175,7 @@ void CanvasView::markRetryFailed (const juce::String& uid)
             card->markRetryFailed();
 }
 
-void CanvasView::refresh()
+void CanvasView::refresh (bool keepVisible)
 {
     rebuildViews();
 
@@ -183,7 +183,7 @@ void CanvasView::refresh()
     if (selection.has_value() && ! selectedCable().has_value())
         selection.reset();
 
-    applyCanvasSize();
+    applyCanvasSize (keepVisible);
     repaint();
 }
 
@@ -197,7 +197,7 @@ void CanvasView::setViewportSize (int widthPx, int heightPx, float newZoom)
     applyCanvasSize();
 }
 
-void CanvasView::applyCanvasSize()
+void CanvasView::applyCanvasSize (bool keepVisible)
 {
     // Content = the union of the stored node rects (read from the document, so it is right even
     // before the views are placed). The canvas holds the content plus room for one more card, and
@@ -212,8 +212,18 @@ void CanvasView::applyCanvasSize()
         content = content.isEmpty() ? r : content.getUnion (r);
     }
 
-    const int fillW = (int) std::floor ((float) viewportW / zoom);
-    const int fillH = (int) std::floor ((float) viewportH / zoom);
+    int fillW = (int) std::floor ((float) viewportW / zoom);
+    int fillH = (int) std::floor ((float) viewportH / zoom);
+
+    // After a drop or delete the canvas must not shrink below what is on screen: the viewport would clamp
+    // its position and the whole picture would jump. It shrinks on the next full recompute after scrolling back.
+    if (keepVisible)
+        if (const auto* vp = findViewport())
+        {
+            fillW = juce::jmax (fillW, (int) std::floor ((float) (vp->getViewPositionX() + vp->getMaximumVisibleWidth())  / zoom));
+            fillH = juce::jmax (fillH, (int) std::floor ((float) (vp->getViewPositionY() + vp->getMaximumVisibleHeight()) / zoom));
+        }
+
     setSize (juce::jmax ((int) std::ceil (content.getRight()) + nodeSlot, fillW),
              juce::jmax ((int) std::ceil (content.getBottom()) + cardHeight / 2, fillH));
     resized();
@@ -282,7 +292,7 @@ void CanvasView::persistNodePosition (const juce::String& uid)
     {
         const auto centre = v->comp->getBounds().getCentre();
         controller.setNodePosition (uid, (float) centre.x, (float) centre.y);
-        applyCanvasSize();          // full recompute: the canvas may shrink back after a drop
+        applyCanvasSize (true);     // full recompute: the canvas may shrink back after a drop, but never below the view
     }
 }
 

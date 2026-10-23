@@ -74,7 +74,7 @@ namespace lighthost
                 if (uid == outUid)
                     continue;
                 const bool endpoint = n.getProperty ("type").toString() != GraphDocument::typePlugin;
-                if (grown.intersects (nodeRect (endpoint, centreOf (uid))))
+                if (grown.intersects (nodeRect (endpoint, centreOf (uid)).expanded ((float) nodeGap * 0.5f)))
                     return true;
             }
             return false;
