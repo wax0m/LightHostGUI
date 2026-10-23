@@ -24,12 +24,28 @@ MainComponent::MainComponent (GraphController& controllerToPoll, const PresetSto
     titleBar.getCpuLoad      = callbacks.cpuLoad;
     titleBar.refreshPresets();
 
-    canvas.onAddPlugin  = [this] (juce::Point<int> p) { if (callbacks.addPlugin)  callbacks.addPlugin (p); };
     canvas.onOpenEditor = [this] (const juce::String& uid) { if (callbacks.openEditor) callbacks.openEditor (uid); };
+    canvas.onZoomBy     = [this] (float f, std::optional<juce::Point<int>> a) { zoomBy (f, a); };
+    canvas.onZoomReset  = [this] { setZoom (1.0f, std::nullopt); };
+    canvas.onZoomFit    = [this] { zoomToFit(); };
 
-    viewport.setViewedComponent (&canvas, false);
+    viewport.setViewedComponent (&zoomHolder, false);
     viewport.setScrollBarsShown (true, true);     // free 2D placement: both axes
     addAndMakeVisible (viewport);
+
+    // Floating chrome: added after the viewport so it paints above it and never scrolls.
+    addButton.onClick = [this]
+    {
+        if (callbacks.addPlugin)
+            callbacks.addPlugin (addButton.localPointToGlobal (addButton.getLocalBounds().getBottomLeft()));
+    };
+    addAndMakeVisible (addButton);
+
+    zoomControls.onZoomOut = [this] { zoomBy (1.0f / CanvasView::kZoomStep, std::nullopt); };
+    zoomControls.onZoomIn  = [this] { zoomBy (CanvasView::kZoomStep, std::nullopt); };
+    zoomControls.onReset   = [this] { setZoom (1.0f, std::nullopt); };
+    zoomControls.onFit     = [this] { zoomToFit(); };
+    addAndMakeVisible (zoomControls);
 
     setSize (1200, 720);
     startTimerHz (60);
@@ -50,6 +66,79 @@ void MainComponent::refreshPresets()
     titleBar.refreshPresets();
 }
 
+void MainComponent::revealNode (const juce::String& uid)
+{
+    const auto logical = canvas.getNodeBounds (uid);
+    if (logical.isEmpty())
+        return;
+
+    const auto scaled   = (logical.toFloat() * zoomHolder.getZoom()).getSmallestIntegerContainer();
+    const auto viewArea = viewport.getViewArea();
+    if (viewArea.contains (scaled))
+        return;
+
+    viewport.setViewPosition (scaled.getCentreX() - viewArea.getWidth()  / 2,
+                              scaled.getCentreY() - viewArea.getHeight() / 2);
+}
+
+//== Zoom ======================================================================
+void MainComponent::zoomBy (float factor, std::optional<juce::Point<int>> screenAnchor)
+{
+    setZoom (zoomHolder.getZoom() * factor, screenAnchor);
+}
+
+void MainComponent::setZoom (float newZoom, std::optional<juce::Point<int>> screenAnchor)
+{
+    newZoom = juce::jlimit (CanvasView::kMinZoom, CanvasView::kMaxZoom, newZoom);
+    const float oldZoom = zoomHolder.getZoom();
+    if (std::abs (newZoom - oldZoom) < 1.0e-4f)
+        return;
+
+    // Keep the canvas point under the anchor (mouse position, or the view centre) fixed.
+    const juce::Point<int> anchor = screenAnchor.has_value()
+        ? viewport.getLocalPoint (nullptr, *screenAnchor)
+        : juce::Point<int> (viewport.getViewWidth() / 2, viewport.getViewHeight() / 2);
+    const auto view = viewport.getViewPosition();
+    const float lx = (float) (view.x + anchor.x) / oldZoom;
+    const float ly = (float) (view.y + anchor.y) / oldZoom;
+
+    applyZoom (newZoom);
+    viewport.setViewPosition (juce::roundToInt (lx * newZoom) - anchor.x,
+                              juce::roundToInt (ly * newZoom) - anchor.y);
+}
+
+void MainComponent::zoomToFit()
+{
+    const auto content = canvas.getContentBounds().expanded (40);
+    if (content.isEmpty())
+        return;
+
+    const float z = juce::jlimit (CanvasView::kMinZoom, CanvasView::kMaxZoom,
+                                  juce::jmin ((float) viewport.getViewWidth()  / (float) content.getWidth(),
+                                              (float) viewport.getViewHeight() / (float) content.getHeight()));
+    applyZoom (z);
+    viewport.setViewPosition (juce::roundToInt ((float) content.getCentreX() * z) - viewport.getViewWidth()  / 2,
+                              juce::roundToInt ((float) content.getCentreY() * z) - viewport.getViewHeight() / 2);
+}
+
+void MainComponent::applyZoom (float z)
+{
+    zoomHolder.setZoom (z);
+    canvas.setViewportSize (viewport.getMaximumVisibleWidth(), viewport.getMaximumVisibleHeight(), z);
+    zoomControls.setZoom (z);
+    layoutOverlays();   // scrollbars may have appeared or vanished
+}
+
+void MainComponent::layoutOverlays()
+{
+    const auto vp  = viewport.getBounds();
+    const int  bar = viewport.getScrollBarThickness();   // reserved whether or not a bar is visible
+    addButton.setBounds (vp.getX() + 16, vp.getY() + 16, 70, 60);
+    zoomControls.setBounds (vp.getRight()  - bar - 14 - ZoomControls::preferredWidth,
+                            vp.getBottom() - bar - 14 - ZoomControls::preferredHeight,
+                            ZoomControls::preferredWidth, ZoomControls::preferredHeight);
+}
+
 void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (LightHostLookAndFeel::appBg());
@@ -60,7 +149,8 @@ void MainComponent::resized()
     auto r = getLocalBounds();
     titleBar.setBounds (r.removeFromTop (TitleBar::barHeight));
     viewport.setBounds (r);
-    canvas.setVisibleArea (viewport.getMaximumVisibleWidth(), viewport.getMaximumVisibleHeight());
+    canvas.setViewportSize (viewport.getMaximumVisibleWidth(), viewport.getMaximumVisibleHeight(), zoomHolder.getZoom());
+    layoutOverlays();
 }
 
 void MainComponent::setUiTimerRunning (bool shouldRun)

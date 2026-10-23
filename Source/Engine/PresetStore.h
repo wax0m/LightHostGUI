@@ -39,5 +39,7 @@ public:
     GraphDocument getPresetDocument (int index) const;               // load (default doc if OOR)
     void removePreset (int index);
 
+    bool migratedOnLoad = false;   // set by fromXml when any preset's graph was a v1 tree
+
     juce::ValueTree state;   // PRESETS
 };

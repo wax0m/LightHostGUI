@@ -14,7 +14,7 @@
 namespace lighthost::ui
 {
 
-class KnobStrip : public juce::Component
+class KnobStrip : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     KnobStrip (const juce::String& labelText, double min, double max, double defaultValue)
@@ -23,7 +23,7 @@ public:
         LightHostLookAndFeel::applyKnobStyle (slider);
         slider.setRange (min, max);
         slider.setValue (defaultValue, juce::dontSendNotification);
-        slider.onValueChange = [this] { if (onValueChange) onValueChange (slider.getValue()); repaint(); };
+        slider.onValueChange = [this] { if (onValueChange) onValueChange (slider.getValue()); updateTooltip(); repaint(); };
         addAndMakeVisible (slider);
     }
 
@@ -34,7 +34,7 @@ public:
 
     juce::Slider& getSlider() noexcept { return slider; }
 
-    void setValueQuiet (double v) { slider.setValue (v, juce::dontSendNotification); repaint(); }
+    void setValueQuiet (double v) { slider.setValue (v, juce::dontSendNotification); updateTooltip(); repaint(); }
 
     // Double-clicking the knob returns it to `v` (fires onValueChange, so the
     // controller/plugin update through the normal path).
@@ -42,13 +42,13 @@ public:
 
     // Re-label / re-range the column (used when a knob is repurposed from the
     // host gain/pan strip to a hosted-plugin parameter).
-    void setLabel (const juce::String& t) { label = t; repaint(); }
+    void setLabel (const juce::String& t) { label = t; updateTooltip(); repaint(); }
     void setRange (double lo, double hi)  { slider.setRange (lo, hi); }
 
     // Override the readout with a plugin-supplied string (its getCurrentValueAsText);
     // clearReadout() reverts to the `format` callback.
-    void setReadout (const juce::String& t) { overrideText = t; hasOverride = true; repaint(); }
-    void clearReadout() { hasOverride = false; }
+    void setReadout (const juce::String& t) { overrideText = t; hasOverride = true; updateTooltip(); repaint(); }
+    void clearReadout() { hasOverride = false; updateTooltip(); }
 
     void resized() override
     {
@@ -56,6 +56,7 @@ public:
         r.removeFromBottom (30);            // label + value area
         const int s = juce::jmin (r.getWidth(), r.getHeight());
         slider.setBounds (r.withSizeKeepingCentre (s, s));
+        updateTooltip();
     }
 
     void paint (juce::Graphics& g) override
@@ -70,13 +71,34 @@ public:
 
         g.setColour (LightHostLookAndFeel::textPrimary());
         g.setFont (LightHostLookAndFeel::mono (11.0f));
-        const juce::String v = hasOverride ? overrideText
-                             : format      ? format (slider.getValue())
-                                           : juce::String (slider.getValue(), 2);
-        g.drawText (v, valueArea, juce::Justification::centred);
+        g.drawText (valueText(), valueArea, juce::Justification::centred);
     }
 
 private:
+    juce::String valueText() const
+    {
+        return hasOverride ? overrideText
+             : format      ? format (slider.getValue())
+                           : juce::String (slider.getValue(), 2);
+    }
+
+    // The uppercase label (mono 9) and the value (mono 11) are cut with an ellipsis when they do not
+    // fit the column: then, and only then, hover shows "<full name>: <full value>" (on the strip and
+    // on its knob, which is the component under the mouse).
+    void updateTooltip()
+    {
+        const auto v = valueText();
+        const float width = (float) getWidth();
+        const bool cut = juce::GlyphArrangement::getStringWidth (LightHostLookAndFeel::mono (9.0f),  label.toUpperCase()) > width
+                      || juce::GlyphArrangement::getStringWidth (LightHostLookAndFeel::mono (11.0f), v) > width;
+        const auto tip = cut ? label + ": " + v : juce::String();
+        if (tip != getTooltip())
+        {
+            setTooltip (tip);
+            slider.setTooltip (tip);
+        }
+    }
+
     juce::Slider slider;
     juce::String label;
     juce::String overrideText;

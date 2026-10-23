@@ -4,6 +4,7 @@
 //
 
 #include "../Source/Engine/PresetStore.h"
+#include "../Source/Engine/SettingsBackup.h"
 #include <iostream>
 
 using namespace juce;
@@ -80,6 +81,49 @@ int runPresetTests (int& checks)
     check (checks, store.getNumPresets() == 1 && store.getPresetName (0) == "Drum Bus",
            "removePreset drops the right one");
 
+    // --- Unreadable settings are backed up, never lost ------------------------
+    {
+        const auto dir = File::getSpecialLocation (File::tempDirectory).getChildFile ("lighthost-backup-test");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        PropertiesFile::Options o;
+        o.commonToAllUsers = false;
+        PropertiesFile props (dir.getChildFile ("test.settings"), o);
+
+        const String raw = "<GRAPH broken";
+        const auto backup = lighthost::backupUnreadable (props, "graphDocument", raw);
+        check (checks, backup.existsAsFile(), "backup: file written");
+        check (checks, backup.loadFileAsString() == raw, "backup: file holds the exact raw text");
+        check (checks, backup.getFileName().contains ("graphDocument-unreadable-"), "backup: file name carries the key");
+        check (checks, props.getValue ("graphDocument.unreadable") == raw, "backup: settings key holds the raw text");
+        check (checks, ! GraphDocument::fromXml (raw).isValid(), "backup: the sample really is unreadable");
+        dir.deleteRecursively();
+    }
+
     std::cout << (failures == 0 ? "  presets ok" : "  presets FAILED") << std::endl;
+    // v1 presets (normalised positions) are migrated to px when the store is loaded.
+    {
+        const auto v1Graph = [] (float px)
+        {
+            return String ("<GRAPH version=\"1\"><NODES>")
+                 + "<NODE uid=\"I\" type=\"audioIn\" name=\"i\" x=\"0.05\" y=\"0.5\"/>"
+                 + "<NODE uid=\"P\" type=\"plugin\" name=\"p\" x=\"" + String (px) + "\" y=\"0.5\"/>"
+                 + "<NODE uid=\"O\" type=\"audioOut\" name=\"o\" x=\"0.95\" y=\"0.5\"/>"
+                 + "</NODES><CONNECTIONS/></GRAPH>";
+        };
+        const String xml = "<PRESETS version=\"1\" active=\"0\">"
+                           "<PRESET name=\"A\">" + v1Graph (0.35f) + "</PRESET>"
+                           "<PRESET name=\"B\">" + v1Graph (0.65f) + "</PRESET></PRESETS>";
+        const auto migrated = PresetStore::fromXml (xml);
+        check (checks, migrated.isValid() && migrated.migratedOnLoad, "v1 presets: store is valid and flagged as migrated");
+        const auto a = migrated.getPresetDocument (0);
+        const auto b = migrated.getPresetDocument (1);
+        check (checks, (int) a.state.getProperty ("version") == 2 && (int) b.state.getProperty ("version") == 2,
+               "v1 presets: both graphs are version 2");
+        check (checks, std::abs (a.getNodeX ("P") - 462.0f) < 0.6f && std::abs (b.getNodeX ("P") - 738.0f) < 0.6f,
+               "v1 presets: plugin positions are px");
+        check (checks, ! PresetStore::fromXml (migrated.toXml()).migratedOnLoad, "migrated presets are not migrated again");
+    }
+
     return failures;
 }

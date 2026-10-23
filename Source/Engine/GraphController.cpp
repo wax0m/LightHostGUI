@@ -1,5 +1,8 @@
 #include "GraphController.h"
 #include "../PluginWindow.h"
+#include "SettingsBackup.h"
+#include "NodeGeometry.h"
+#include "NodePlacement.h"
 
 GraphController::GraphController (AudioProcessorGraph& g, AudioPluginFormatManager& fm)
     : graph (g), formatManager (fm)
@@ -11,14 +14,25 @@ void GraphController::loadFrom (PropertiesFile& settings)
 {
     const String xml = settings.getValue ("graphDocument");
     bool loaded = false;
+    loadWarning = {};
 
     if (xml.isNotEmpty())
     {
         GraphDocument doc = GraphDocument::fromXml (xml);
         if (doc.isValid())
         {
+            migratedOnLoad = doc.migratedOnLoad;
             document = std::move (doc);
             loaded = true;
+        }
+        else
+        {
+            // The next save() would overwrite the unreadable value with the fallback below.
+            const auto backup = lighthost::backupUnreadable (settings, "graphDocument", xml);
+            loadWarning = "Your saved graph could not be read. "
+                        + (backup != File() ? "A copy was kept at " + backup.getFullPathName() + ". "
+                                            : String ("It could not be copied either. "))
+                        + "The app started with defaults.";
         }
     }
 
@@ -397,54 +411,15 @@ std::vector<GraphController::ChainItem> GraphController::getChain() const
     return result;
 }
 
-// Place a new node to the right of the current rightmost plugin, then walk down
-// (and finally left) past any occupied slot — two cards must never land on the
-// same spot, or the later one is invisible (positions are otherwise user-owned).
-juce::Point<float> GraphController::placementForNewNode() const
+// Adds the document node between the last card and OUT. Existing cards never move; OUT is pushed right when
+// it is in the way. Positions are GUI-only, so this publishes nothing.
+String GraphController::addPluginNodeAtNextSlot (const PluginDescription& desc)
 {
-    ValueTree nodes = document.getNodes();
-
-    float maxX = 0.15f;
-    bool  anyPlugin = false;
-    for (int i = 0; i < nodes.getNumChildren(); ++i)
-    {
-        const auto n = nodes.getChild (i);
-        if (n.getProperty ("type").toString() == GraphDocument::typePlugin)
-        {
-            // Positions go through the document accessors so the default for a node
-            // without x/y lives in one place (GraphDocument::getNodeX/getNodeY).
-            maxX = jmax (maxX, document.getNodeX (n.getProperty ("uid").toString()));
-            anyPlugin = true;
-        }
-    }
-
-    const auto occupied = [this, &nodes] (float px, float py)
-    {
-        for (int i = 0; i < nodes.getNumChildren(); ++i)
-        {
-            const auto n = nodes.getChild (i);
-            if (n.getProperty ("type").toString() != GraphDocument::typePlugin)
-                continue;
-            const String uid = n.getProperty ("uid").toString();
-            if (std::abs (document.getNodeX (uid) - px) < 0.05f
-             && std::abs (document.getNodeY (uid) - py) < 0.05f)
-                return true;
-        }
-        return false;
-    };
-
-    float x = anyPlugin ? jmin (0.9f, maxX + 0.12f) : 0.3f;
-    float y = 0.5f;
-    for (int guard = 0; guard < 64 && occupied (x, y); ++guard)
-    {
-        y += 0.12f;                                     // cascade down…
-        if (y > 0.9f)
-        {
-            y = 0.1f;                                   // …then wrap to the top
-            x = jmax (0.1f, x - 0.06f);                 // one half-step left per column
-        }
-    }
-    return { x, y };
+    const auto placement = lighthost::placeNewPlugin (document);
+    const String uid = document.addPluginNode (desc, placement.centre.x, placement.centre.y);
+    if (placement.moveOutTo.has_value())
+        document.setNodePosition (document.getIoNodeUid (false), placement.moveOutTo->x, placement.moveOutTo->y);
+    return uid;
 }
 
 String GraphController::addPlugin (const PluginDescription& desc)
@@ -458,8 +433,7 @@ String GraphController::appendToChain (const PluginDescription& desc)
 {
     std::vector<String> chain = getChainUids();
 
-    const auto pos = placementForNewNode();
-    const String uid = document.addPluginNode (desc, pos.x, pos.y);
+    const String uid = addPluginNodeAtNextSlot (desc);
     chain.insert (chain.end() - 1, uid);   // before audioOut
     rewriteChainConnections (chain);
 
@@ -472,8 +446,7 @@ String GraphController::appendToChain (const PluginDescription& desc)
 
 String GraphController::addNodeUnconnected (const PluginDescription& desc)
 {
-    const auto pos = placementForNewNode();
-    const String uid = document.addPluginNode (desc, pos.x, pos.y);
+    const String uid = addPluginNodeAtNextSlot (desc);
     addPluginNodeToGraph (document.getNodeByUid (uid));
     rewireConnections();   // existing connections are untouched — nothing is rewritten serially
     return uidToNodeId.count (uid) > 0 ? uid : String();
@@ -580,35 +553,60 @@ void GraphController::insertMasterMeters()
 
     // Output meter first: measures exactly what reaches the audio output.
     if (itOut != uidToNodeId.end())
+    {
         outputMeter = spliceMeterBefore (itOut->second);
+
+        // Safety limiter goes in front of the output meter, so the meter shows what
+        // actually reaches the device: ... -> guard -> meter -> audioOut.
+        if (outputMeter != nullptr)
+            for (auto* n : graph.getNodes())
+                if (n->getProcessor() == outputMeter)
+                {
+                    spliceGuardBefore (n->nodeID);
+                    break;
+                }
+    }
 
     // Input meter: measures the dry signal leaving the audio input.
     if (itIn != uidToNodeId.end())
         inputMeter = spliceMeterAfter (itIn->second);
 }
 
-// Redirect every X -> target connection through a new meter: X -> meter -> target.
-MeterProcessor* GraphController::spliceMeterBefore (AudioProcessorGraph::NodeID target)
+// Redirect every X -> target connection through a new node: X -> node -> target.
+template <typename Proc>
+AudioProcessorGraph::Node* GraphController::spliceProcBefore (AudioProcessorGraph::NodeID target)
 {
-    auto meterNode = addNodeBatched (std::make_unique<MeterProcessor>());
-    if (meterNode == nullptr)
+    auto node = addNodeBatched (std::make_unique<Proc>());
+    if (node == nullptr)
         return nullptr;
 
-    const auto meterId = meterNode->nodeID;
+    const auto nodeId = node->nodeID;
 
     for (const auto& c : graph.getConnections())
     {
         if (c.destination.nodeID == target)
         {
             disconnectBatched (c);
-            connectBatched ({ c.source, { meterId, c.destination.channelIndex } });
+            connectBatched ({ c.source, { nodeId, c.destination.channelIndex } });
         }
     }
 
     for (int ch = 0; ch < MeterTap::numChannels; ++ch)
-        connectBatched ({ { meterId, ch }, { target, ch } });
+        connectBatched ({ { nodeId, ch }, { target, ch } });
 
-    return dynamic_cast<MeterProcessor*> (meterNode->getProcessor());
+    return node.get();
+}
+
+MeterProcessor* GraphController::spliceMeterBefore (AudioProcessorGraph::NodeID target)
+{
+    auto* node = spliceProcBefore<MeterProcessor> (target);
+    return node != nullptr ? dynamic_cast<MeterProcessor*> (node->getProcessor()) : nullptr;
+}
+
+OutputGuardProcessor* GraphController::spliceGuardBefore (AudioProcessorGraph::NodeID target)
+{
+    auto* node = spliceProcBefore<OutputGuardProcessor> (target);
+    return node != nullptr ? dynamic_cast<OutputGuardProcessor*> (node->getProcessor()) : nullptr;
 }
 
 // Redirect every source -> Y connection through a new meter: source -> meter -> Y.
@@ -927,7 +925,8 @@ void GraphController::rewireConnections()
         if (dynamic_cast<NodeStripProcessor*> (node->getProcessor()) != nullptr
          || dynamic_cast<MeterProcessor*>     (node->getProcessor()) != nullptr
          || dynamic_cast<MonoInputProcessor*> (node->getProcessor()) != nullptr
-         || dynamic_cast<MixProcessor*>       (node->getProcessor()) != nullptr)
+         || dynamic_cast<MixProcessor*>       (node->getProcessor()) != nullptr
+         || dynamic_cast<OutputGuardProcessor*> (node->getProcessor()) != nullptr)
             runtimeNodes.push_back (node->nodeID);
 
     for (auto id : runtimeNodes)
@@ -1113,6 +1112,7 @@ bool GraphController::nodeAcceptsMidi (const String& uid) const
 void GraphController::loadDocument (const GraphDocument& doc)
 {
     document.state = doc.state.createCopy();   // deep copy: never share the store's tree
+    GraphDocument::migrateTree (document.state);   // safety net: a v1 tree must never reach the canvas
     rebuild();
 }
 

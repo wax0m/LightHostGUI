@@ -27,6 +27,12 @@ professional pro-audio aesthetic (in the lineage of Ableton Live, Bitwig, and Se
 - **Low latency** — WASAPI exclusive mode by default; ASIO available when built with an ASIO SDK
   (see below).
 
+## Download
+
+Windows (x64) builds are published as a zip on the GitHub Releases page, with its SHA-256 checksum next to it
+(`LightHost-GUI-<version>-win-x64.zip.sha256`). The build is not code-signed. For other platforms, build from source.
+See [CHANGELOG.md](CHANGELOG.md) for what changed.
+
 ## Build
 
 The first CMake configure downloads JUCE (pinned to 8.0.13) and needs network access.
@@ -36,7 +42,7 @@ The first CMake configure downloads JUCE (pinned to 8.0.13) and needs network ac
 cmake -B build
 cmake --build build --config Release
 ```
-Binary: `build/LightHost_artefacts/Release/Light Host.exe`
+Binary: `build/LightHost_artefacts/Release/LightHost GUI.exe`
 
 **macOS**:
 ```
@@ -78,9 +84,22 @@ Please report security problems privately, not as public issues. See [`SECURITY.
 
 ## License
 
-GPL — version 2 or, at your option, any later version — inherited from upstream Light Host. Any
-derivative work stays under the GPL. See [`gpl.txt`](gpl.txt) and [`license`](license) for the full
-text and the original copyright.
+LightHost GUI is distributed under the **GNU AGPLv3** (see [`LICENSE`](LICENSE)), because it is built on
+JUCE 8, whose open-source licence is AGPLv3.
+
+The original Light Host code is GPL-2.0-or-later and is used here under its "or later" option. The upstream
+notice and GPLv2 text are kept for attribution: [`LICENSE-UPSTREAM`](LICENSE-UPSTREAM) and [`gpl.txt`](gpl.txt).
+
+Third-party components:
+- JUCE 8: AGPLv3
+- VST 3 SDK: MIT (bundled with JUCE 8.0.13)
+- ASIO SDK: GPLv3 option, only in builds made with `ASIO_SDK_DIR`
+- Plug icon by Bogdan Rosu (flaticon.com): CC BY 3.0
+- Libraries compiled in through JUCE (FLAC, Ogg Vorbis, libjpeg, libpng, zlib, HarfBuzz, SheenBidi): see
+  [`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt) for their notices and licence texts
+
+VST is a registered trademark of Steinberg Media Technologies GmbH. ASIO is a trademark and software of
+Steinberg Media Technologies GmbH. Other product names are trademarks of their respective owners.
 
 ## Credits
 

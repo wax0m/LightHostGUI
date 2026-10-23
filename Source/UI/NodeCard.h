@@ -13,6 +13,7 @@
 
 #include <JuceHeader.h>
 #include "../Engine/GraphController.h"
+#include "../Engine/NodeGeometry.h"
 #include "LightHostLookAndFeel.h"
 #include "KnobStrip.h"
 #include "SegmentedMeter.h"
@@ -20,11 +21,23 @@
 namespace lighthost::ui
 {
 
-class NodeCard : public juce::Component
+// Middle-button gestures belong to the canvas (pan), not to the node under the mouse:
+// forwards the event to the parent and returns true. Shared by NodeCard and EndpointNode.
+inline bool forwardMiddleToParent (juce::Component& c, const juce::MouseEvent& e,
+                                   void (juce::Component::*handler) (const juce::MouseEvent&))
+{
+    if (! e.mods.isMiddleButtonDown())
+        return false;
+    if (auto* parent = c.getParentComponent())
+        (parent->*handler) (e.getEventRelativeTo (parent));
+    return true;
+}
+
+class NodeCard : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    static constexpr int cardWidth  = 226;
-    static constexpr int cardHeight = 300;
+    static constexpr int cardWidth  = lighthost::geometry::cardWidth;
+    static constexpr int cardHeight = lighthost::geometry::cardHeight;
 
     NodeCard (GraphController& controller, GraphController::ChainItem item);
 
@@ -56,8 +69,10 @@ public:
 
 private:
     void applyBypassLook();
+    void updateNameTooltip();                                    // full plugin name when the title is elided
     void setupGainPanKnobs();                                    // host channel strip
     void setupPluginParamKnobs (const std::vector<params::ParamInfo>&);  // hosted-plugin params
+    void setupMixKnob();                                         // dry/wet, on every live card
     void refreshParamReadouts();                                 // poll .value/.text on the timer
 
     GraphController& controller;
@@ -70,8 +85,8 @@ private:
     // two curated plugin parameters — paramIndices decides (empty => host mode).
     KnobStrip knobA { "Gain", 0.0, 2.0, 1.0 };
     KnobStrip knobB { "Pan", -1.0, 1.0, 0.0 };
-    // Dry/wet blend around this node's plugin (host strip). Shown only in host
-    // mode — like Gain/Pan, the plugin's own param knobs take precedence.
+    // Dry/wet blend around this node's plugin. Shown on every live card as the last
+    // column, beside either the plugin's own params or the host Gain/Pan.
     KnobStrip knobC { "Mix", 0.0, 1.0, 1.0 };
     juce::Rectangle<int> knobArea;   // the knob band, also used for the missing-plugin hint
     std::vector<int> paramIndices;   // knob slot -> plugin param index

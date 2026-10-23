@@ -9,10 +9,15 @@ static const juce::Colour kPortIdle    { 0xff8a8078 };
 static const juce::Colour kValidGreen  { 0xff5ec27a };
 static const juce::Colour kInvalidRed  { 0xffd25b5b };
 
-static constexpr float kOutPortHit = 12.0f;   // start a wire from an output port
-static constexpr float kInPortHit  = 18.0f;   // drop tolerance onto an input port
-static constexpr float kCableHit   = 6.0f;    // click-to-delete tolerance
-static constexpr float kPortGap    = 8.0f;    // port dot offset outside the card edge
+// Hit tolerances in SCREEN pixels; divided by the zoom before use (logical coords).
+static constexpr float kOutPortHit     = 12.0f;   // start a wire from an output port
+static constexpr float kInPortHit      = 18.0f;   // drop tolerance onto an input port
+static constexpr float kBodyDropMargin = 10.0f;   // drop onto a node: its bounds grown by this
+static constexpr float kCableHit       = 6.0f;    // click tolerance to select a cable
+static constexpr float kPanThreshold   = 3.0f;    // drag distance before a press becomes a pan
+// In LOGICAL pixels (scales with the canvas, like the ports).
+static constexpr float kPortGap        = 8.0f;    // port dot offset outside the card edge
+static constexpr float kBadgeRadius    = 9.0f;    // delete badge on the selected cable
 
 //== Endpoint ==================================================================
 void EndpointNode::paint (juce::Graphics& g)
@@ -40,12 +45,18 @@ void EndpointNode::paint (juce::Graphics& g)
 
 void EndpointNode::mouseDown (const juce::MouseEvent& e)
 {
+    if (forwardMiddleToParent (*this, e, &juce::Component::mouseDown))
+        return;
+    if (auto* parent = getParentComponent())
+        parent->grabKeyboardFocus();
     nodeDragActive = true;
     lastParentPos  = e.getEventRelativeTo (getParentComponent()).getPosition();
 }
 
 void EndpointNode::mouseDrag (const juce::MouseEvent& e)
 {
+    if (forwardMiddleToParent (*this, e, &juce::Component::mouseDrag))
+        return;
     if (! nodeDragActive)
         return;
     const auto p = e.getEventRelativeTo (getParentComponent()).getPosition();
@@ -54,8 +65,10 @@ void EndpointNode::mouseDrag (const juce::MouseEvent& e)
     if (onDragMove) onDragMove (uid, delta);
 }
 
-void EndpointNode::mouseUp (const juce::MouseEvent&)
+void EndpointNode::mouseUp (const juce::MouseEvent& e)
 {
+    if (forwardMiddleToParent (*this, e, &juce::Component::mouseUp))
+        return;
     if (nodeDragActive)
     {
         nodeDragActive = false;
@@ -63,38 +76,15 @@ void EndpointNode::mouseUp (const juce::MouseEvent&)
     }
 }
 
-//== Add slot ==================================================================
-void AddSlot::paint (juce::Graphics& g)
-{
-    auto b = getLocalBounds().toFloat().reduced (0.75f);
-    juce::Path border;
-    border.addRoundedRectangle (b, 11.0f);
-    const float dashes[] = { 5.0f, 4.0f };
-    g.setColour (hot ? LightHostLookAndFeel::accent().withAlpha (0.7f) : juce::Colour (0xff45403a));
-    juce::PathStrokeType (1.5f).createDashedStroke (border, border, dashes, 2);
-    g.strokePath (border, juce::PathStrokeType (1.5f));
-
-    auto centre = b.getCentre();
-    auto circle = juce::Rectangle<float> (26, 26).withCentre ({ centre.x, centre.y - 6 });
-    g.setColour (hot ? LightHostLookAndFeel::accent().withAlpha (0.8f) : juce::Colour (0xff55504a));
-    g.drawEllipse (circle, 1.5f);
-    g.setColour (hot ? LightHostLookAndFeel::accent() : LightHostLookAndFeel::textSecond());
-    g.setFont (LightHostLookAndFeel::display (18.0f));
-    g.drawText ("+", circle, juce::Justification::centred);
-
-    g.setColour (LightHostLookAndFeel::textTert());
-    g.setFont (LightHostLookAndFeel::mono (8.0f));
-    g.drawText ("ADD", b.withTop (centre.y + 10).withHeight (12), juce::Justification::centred);
-}
-
 //== CanvasView ================================================================
 CanvasView::CanvasView (GraphController& c) : controller (c)
 {
-    inNode.setSize (54, 150);
-    outNode.setSize (54, 150);
+    setWantsKeyboardFocus (true);   // Delete / Esc / Ctrl +,-,0
+
+    inNode.setSize (lighthost::geometry::endpointWidth, lighthost::geometry::endpointHeight);
+    outNode.setSize (lighthost::geometry::endpointWidth, lighthost::geometry::endpointHeight);
     addAndMakeVisible (inNode);
     addAndMakeVisible (outNode);
-    addAndMakeVisible (addSlot);
 
     auto wireEndpoint = [this] (EndpointNode& n)
     {
@@ -103,12 +93,6 @@ CanvasView::CanvasView (GraphController& c) : controller (c)
     };
     wireEndpoint (inNode);
     wireEndpoint (outNode);
-
-    addSlot.onClick = [this]
-    {
-        if (onAddPlugin)
-            onAddPlugin (addSlot.localPointToGlobal (addSlot.getLocalBounds().getBottomLeft()));
-    };
 
     refresh();
 }
@@ -157,7 +141,7 @@ void CanvasView::rebuildViews()
                     if (safe == nullptr)
                         return;
                     safe->controller.removeNode (u);   // heals around the node; branches survive
-                    safe->refresh();
+                    safe->refresh (true);              // keep the view where it is: no jump after a delete
                 });
             };
             card->onRetry = [this] (const juce::String& u)
@@ -182,8 +166,6 @@ void CanvasView::rebuildViews()
             views.push_back ({ uid, card, true, true });
         }
     }
-
-    autoLayoutIfStacked();
 }
 
 void CanvasView::markRetryFailed (const juce::String& uid)
@@ -193,69 +175,57 @@ void CanvasView::markRetryFailed (const juce::String& uid)
             card->markRetryFailed();
 }
 
-void CanvasView::autoLayoutIfStacked()
-{
-    // Serially-built / migrated chains place every plugin at (0.5, 0.5) so they
-    // stack. If two or more plugin nodes are still at that default, spread them
-    // left→right in document order and persist, giving a sane first layout. Once a
-    // node has a real (dragged) position it is left untouched.
-    std::vector<juce::String> pluginUids;
-    int defaulted = 0;
-    for (const auto& v : views)
-    {
-        if (v.comp == &inNode || v.comp == &outNode)
-            continue;
-        pluginUids.push_back (v.uid);
-        const float x = controller.getNodeX (v.uid);
-        const float y = controller.getNodeY (v.uid);
-        if (std::abs (x - 0.5f) < 1.0e-3f && std::abs (y - 0.5f) < 1.0e-3f)
-            ++defaulted;
-    }
-
-    if (defaulted < 2)
-        return;
-
-    const int n = (int) pluginUids.size();
-    for (int i = 0; i < n; ++i)
-    {
-        const float nx = n == 1 ? 0.5f
-                                : layoutBandLo + (float) i * (layoutBandSpan / (float) (n - 1));
-        controller.setNodePosition (pluginUids[(size_t) i], nx, 0.5f);
-    }
-}
-
-void CanvasView::refresh()
+void CanvasView::refresh (bool keepVisible)
 {
     rebuildViews();
 
-    // Scale the virtual width to the plugin count so a migrated multi-plugin chain
-    // lays out without overlap: plugins span the normalised layoutBand, so the usable
-    // width must be large enough that band-span / (n-1) maps to at least nodeSlot px.
-    const int pluginCount = cards.size();
-    const int spanPx = pluginCount > 1
-        ? juce::roundToInt ((float) nodeSlot * (float) (pluginCount - 1) / layoutBandSpan)
-        : 0;
-    virtualW = juce::jmax (1200, marginX * 2 + spanPx);
+    // A selection whose cable no longer exists (deleted, preset switch) is dropped.
+    if (selection.has_value() && ! selectedCable().has_value())
+        selection.reset();
 
-    // TODO(zoom): apply a canvas AffineTransform::scale here for user zoom.
-    applyCanvasSize();              // virtual canvas; the viewport scrolls
+    applyCanvasSize (keepVisible);
     repaint();
 }
 
-void CanvasView::setVisibleArea (int w, int h)
+void CanvasView::setViewportSize (int widthPx, int heightPx, float newZoom)
 {
-    if (w == visibleW && h == visibleH)
+    if (widthPx == viewportW && heightPx == viewportH && newZoom == zoom)
         return;
-    visibleW = w;
-    visibleH = h;
+    viewportW = widthPx;
+    viewportH = heightPx;
+    zoom = newZoom;
     applyCanvasSize();
 }
 
-void CanvasView::applyCanvasSize()
+void CanvasView::applyCanvasSize (bool keepVisible)
 {
-    // Grow to fill the viewport so there is no empty gap, but never below the node
-    // content extent; node centres still map onto virtualW/virtualH via centreForNorm.
-    setSize (juce::jmax (virtualW, visibleW), juce::jmax (virtualH, visibleH));
+    // Content = the union of the stored node rects (read from the document, so it is right even
+    // before the views are placed). The canvas holds the content plus room for one more card, and
+    // always fills the viewport at any zoom. floor, not ceil: the scaled size must never exceed the
+    // viewport by a rounding pixel, or a scrollbar appears for nothing.
+    using namespace lighthost::geometry;
+    juce::Rectangle<float> content;
+    for (const auto& v : views)
+    {
+        const auto r = nodeRect (v.comp == &inNode || v.comp == &outNode,
+                                 { controller.getNodeX (v.uid), controller.getNodeY (v.uid) });
+        content = content.isEmpty() ? r : content.getUnion (r);
+    }
+
+    int fillW = (int) std::floor ((float) viewportW / zoom);
+    int fillH = (int) std::floor ((float) viewportH / zoom);
+
+    // After a drop or delete the canvas must not shrink below what is on screen: the viewport would clamp
+    // its position and the whole picture would jump. It shrinks on the next full recompute after scrolling back.
+    if (keepVisible)
+        if (const auto* vp = findViewport())
+        {
+            fillW = juce::jmax (fillW, (int) std::floor ((float) (vp->getViewPositionX() + vp->getMaximumVisibleWidth())  / zoom));
+            fillH = juce::jmax (fillH, (int) std::floor ((float) (vp->getViewPositionY() + vp->getMaximumVisibleHeight()) / zoom));
+        }
+
+    setSize (juce::jmax ((int) std::ceil (content.getRight()) + nodeSlot, fillW),
+             juce::jmax ((int) std::ceil (content.getBottom()) + cardHeight / 2, fillH));
     resized();
 }
 
@@ -269,29 +239,26 @@ void CanvasView::tick()
     repaint();                      // animate the traveling flow dots
 }
 
+juce::Rectangle<int> CanvasView::getNodeBounds (const juce::String& uid) const
+{
+    if (const auto* v = viewForUid (uid))
+        return v->comp->getBounds();
+    return {};
+}
+
+juce::Rectangle<int> CanvasView::getContentBounds() const
+{
+    juce::Rectangle<int> r;
+    for (const auto& v : views)
+        r = r.isEmpty() ? v.comp->getBounds() : r.getUnion (v.comp->getBounds());
+    return r;
+}
+
 //== Geometry ==================================================================
-// Node positions map over the ACTUAL canvas size (getWidth()/getHeight()), not the
-// virtualW/virtualH content-minimum: applyCanvasSize() grows the component to fill the
-// viewport, so mapping over the real size lets nodes reach the whole filled area (no
-// dead gap on the right/bottom). getWidth() == jmax(virtualW, visibleW), so this also
-// handles window grow/shrink, and place<->persist stay consistent (both read live size).
-juce::Point<int> CanvasView::centreForNorm (float nx, float ny) const
-{
-    const int x = marginX + juce::roundToInt (juce::jlimit (0.0f, 1.0f, nx) * (float) (getWidth()  - 2 * marginX));
-    const int y = marginY + juce::roundToInt (juce::jlimit (0.0f, 1.0f, ny) * (float) (getHeight() - 2 * marginY));
-    return { x, y };
-}
-
-juce::Point<float> CanvasView::normForCentre (juce::Point<int> centre) const
-{
-    const float nx = (float) (centre.x - marginX) / (float) (getWidth()  - 2 * marginX);
-    const float ny = (float) (centre.y - marginY) / (float) (getHeight() - 2 * marginY);
-    return { juce::jlimit (0.0f, 1.0f, nx), juce::jlimit (0.0f, 1.0f, ny) };
-}
-
+// Stored positions are the node centre in logical px, so place <-> persist are exact inverses.
 void CanvasView::placeNode (juce::Component& c, const juce::String& uid)
 {
-    const auto centre = centreForNorm (controller.getNodeX (uid), controller.getNodeY (uid));
+    const juce::Point<int> centre { juce::roundToInt (controller.getNodeX (uid)), juce::roundToInt (controller.getNodeY (uid)) };
     c.setBounds (juce::Rectangle<int> (c.getWidth(), c.getHeight()).withCentre (centre));
 }
 
@@ -300,9 +267,21 @@ void CanvasView::moveNodeBy (const juce::String& uid, juce::Point<int> delta)
     if (const auto* v = viewForUid (uid))
     {
         auto* c = v->comp;
-        int x = juce::jlimit (0, getWidth()  - c->getWidth(),  c->getX() + delta.x);
-        int y = juce::jlimit (0, getHeight() - c->getHeight(), c->getY() + delta.y);
+        // Top-left stays on the canvas and the centre within the document's coordinate range.
+        const int maxCoord = (int) lighthost::geometry::kMaxCoord;
+        const int x = juce::jlimit (0, maxCoord - c->getWidth()  / 2, c->getX() + delta.x);
+        const int y = juce::jlimit (0, maxCoord - c->getHeight() / 2, c->getY() + delta.y);
         c->setTopLeftPosition (x, y);
+
+        // Past the right / bottom edge the canvas grows live (it only shrinks again on drop). The
+        // document still holds the old position until then, so resized() must not re-place nodes.
+        const int needW = c->getRight()  + lighthost::geometry::nodeSlot;
+        const int needH = c->getBottom() + lighthost::geometry::cardHeight / 2;
+        if (needW > getWidth() || needH > getHeight())
+        {
+            const juce::ScopedValueSetter<bool> hold (suppressPlacement, true);
+            setSize (juce::jmax (getWidth(), needW), juce::jmax (getHeight(), needH));
+        }
         repaint();                  // redraw cables to follow the node live
     }
 }
@@ -311,8 +290,9 @@ void CanvasView::persistNodePosition (const juce::String& uid)
 {
     if (const auto* v = viewForUid (uid))
     {
-        const auto norm = normForCentre (v->comp->getBounds().getCentre());
-        controller.setNodePosition (uid, norm.x, norm.y);
+        const auto centre = v->comp->getBounds().getCentre();
+        controller.setNodePosition (uid, (float) centre.x, (float) centre.y);
+        applyCanvasSize (true);     // full recompute: the canvas may shrink back after a drop, but never below the view
     }
 }
 
@@ -362,17 +342,38 @@ std::vector<CanvasView::Cable> CanvasView::buildCables() const
 juce::String CanvasView::outputPortAt (juce::Point<float> p) const
 {
     for (const auto& v : views)
-        if (v.hasOutput && outputPort (v.uid).getDistanceFrom (p) <= kOutPortHit)
+        if (v.hasOutput && outputPort (v.uid).getDistanceFrom (p) <= kOutPortHit / zoom)
             return v.uid;
     return {};
 }
 
-juce::String CanvasView::inputPortAt (juce::Point<float> p) const
+juce::String CanvasView::inputTargetAt (juce::Point<float> p) const
 {
+    // 1. The input port itself (the original, precise target).
     for (const auto& v : views)
-        if (v.hasInput && inputPort (v.uid).getDistanceFrom (p) <= kInPortHit)
+        if (v.hasInput && inputPort (v.uid).getDistanceFrom (p) <= kInPortHit / zoom)
             return v.uid;
+
+    // 2. Anywhere on a node, plus a small margin: dropping on the card is the natural
+    //    gesture. Topmost first (later views are added later, so they paint above).
+    for (auto it = views.rbegin(); it != views.rend(); ++it)
+        if (it->hasInput && it->comp->getBounds().toFloat().expanded (kBodyDropMargin / zoom).contains (p))
+            return it->uid;
+
     return {};
+}
+
+std::optional<CanvasView::Cable> CanvasView::cableAt (juce::Point<float> p) const
+{
+    for (const auto& cable : buildCables())
+    {
+        const auto path = cablePath (cable.a, cable.b);
+        juce::Point<float> nearest;
+        path.getNearestPoint (p, nearest);
+        if (nearest.getDistanceFrom (p) <= kCableHit / zoom)
+            return cable;
+    }
+    return std::nullopt;
 }
 
 juce::Path CanvasView::cablePath (juce::Point<float> a, juce::Point<float> b)
@@ -384,77 +385,261 @@ juce::Path CanvasView::cablePath (juce::Point<float> a, juce::Point<float> b)
     return p;
 }
 
-//== Mouse: wire drag + delete =================================================
+//== Cable selection ===========================================================
+std::optional<CanvasView::Cable> CanvasView::selectedCable() const
+{
+    if (! selection.has_value())
+        return std::nullopt;
+    for (const auto& cable : buildCables())
+        if (cable.src == selection->src && cable.dst == selection->dst)
+            return cable;
+    return std::nullopt;
+}
+
+std::optional<juce::Point<float>> CanvasView::deleteBadgeCentre() const
+{
+    if (const auto cable = selectedCable())
+    {
+        const auto path = cablePath (cable->a, cable->b);
+        return path.getPointAlongPath (path.getLength() * 0.5f);
+    }
+    return std::nullopt;
+}
+
+void CanvasView::deleteSelectedCable()
+{
+    if (const auto cable = selectedCable())
+        controller.disconnectPair (cable->src, cable->dst);   // every edge of the pair, one rewire
+    selection.reset();
+    repaint();
+}
+
+void CanvasView::showCableMenu (const Cable& cable)
+{
+    selection = CableKey { cable.src, cable.dst };
+    repaint();
+
+    juce::PopupMenu m;
+    m.addItem (1, "Delete connection");
+    auto* self = this;   // MSVC rejects `this` inside the nested init-capture
+    m.showMenuAsync (juce::PopupMenu::Options(),
+        [safe = juce::Component::SafePointer<CanvasView> (self), key = CableKey { cable.src, cable.dst }] (int r)
+        {
+            if (safe == nullptr || r != 1)
+                return;
+            safe->selection = key;
+            safe->deleteSelectedCable();
+        });
+}
+
+//== Mouse: wire drag, cable select, pan =======================================
 void CanvasView::mouseDown (const juce::MouseEvent& e)
 {
+    grabKeyboardFocus();
     const auto p = e.position;
+    panArmed = panning = false;
+    pressedCable.reset();
+
+    // Right-click on a cable: context menu.
+    if (e.mods.isPopupMenu())
+    {
+        if (const auto cable = cableAt (p))
+            showCableMenu (*cable);
+        return;
+    }
+
+    // Middle button: pan from anywhere on the canvas background.
+    const bool middle = e.mods.isMiddleButtonDown();
+
+    // The x badge on the selected cable deletes it.
+    if (! middle)
+        if (const auto badge = deleteBadgeCentre(); badge.has_value() && badge->getDistanceFrom (p) <= kBadgeRadius + 2.0f)
+        {
+            deleteSelectedCable();
+            return;
+        }
 
     // Start a wire from an output port.
-    if (const auto src = outputPortAt (p); src.isNotEmpty())
+    if (! middle)
+        if (const auto src = outputPortAt (p); src.isNotEmpty())
+        {
+            draggingWire = true;
+            wireSrcUid   = src;
+            wireEnd      = p;
+            hoverDstUid  = {};
+            hoverValid   = false;
+            beginDragAutoRepeat (30);   // keep auto-scrolling while the mouse rests at an edge
+            repaint();
+            return;
+        }
+
+    // A press on a cable selects it on release -- unless the press turns into a pan.
+    if (! middle)
+        if (const auto cable = cableAt (p))
+            pressedCable = CableKey { cable->src, cable->dst };
+
+    // Empty space (or a cable): arm a pan; it starts once the mouse actually moves.
+    if (auto* vp = findViewport())
     {
-        draggingWire = true;
-        wireSrcUid   = src;
-        wireEnd      = p;
+        panArmed       = true;
+        panStartScreen = e.getScreenPosition();
+        panStartView   = vp->getViewPosition();
+    }
+}
+
+void CanvasView::mouseDrag (const juce::MouseEvent& e)
+{
+    if (draggingWire)
+    {
+        wireEnd = e.position;
+
+        // Dragging a wire toward the viewport edge scrolls the canvas.
+        if (auto* vp = findViewport())
+        {
+            const auto inViewport = vp->getLocalPoint (nullptr, e.getScreenPosition());
+            vp->autoScroll (inViewport.x, inViewport.y, 40, 14);
+        }
+
+        // Validity only depends on the hovered target, not the cursor position —
+        // re-run the (cycle-DFS) validation only when the target actually changes.
+        if (const juce::String dst = inputTargetAt (wireEnd); dst != hoverDstUid)
+        {
+            hoverDstUid = dst;
+            hoverValid  = dst.isNotEmpty() && dst != wireSrcUid
+                          && controller.canConnectPair (wireSrcUid, dst);
+        }
+        repaint();
+        return;
+    }
+
+    if (! panArmed)
+        return;
+
+    if (! panning && e.getDistanceFromDragStart() > kPanThreshold)
+    {
+        panning = true;
+        pressedCable.reset();    // it was a pan, not a click on the cable
+        setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    }
+
+    if (panning)
+        if (auto* vp = findViewport())
+            vp->setViewPosition (panStartView - (e.getScreenPosition() - panStartScreen));
+}
+
+void CanvasView::mouseUp (const juce::MouseEvent&)
+{
+    if (draggingWire)
+    {
+        if (hoverValid)
+            controller.connectPair (wireSrcUid, hoverDstUid);   // atomic stereo pair, one rewire
+
+        draggingWire = false;
+        wireSrcUid   = {};
         hoverDstUid  = {};
         hoverValid   = false;
         repaint();
         return;
     }
 
-    // Otherwise: click a cable to delete it (both channels, one live rewire).
-    for (const auto& cable : buildCables())
+    if (panArmed && ! panning)
     {
-        const auto path = cablePath (cable.a, cable.b);
-        juce::Point<float> nearest;
-        if (path.getNearestPoint (p, nearest); nearest.getDistanceFrom (p) <= kCableHit)
-        {
-            controller.disconnectPair (cable.src, cable.dst);
-            repaint();
+        // A click without movement: select the pressed cable, or clear the selection.
+        if (pressedCable.has_value())
+            selection = pressedCable;
+        else
+            selection.reset();
+        repaint();
+    }
+
+    if (panning)
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+
+    panArmed = panning = false;
+    pressedCable.reset();
+}
+
+// Double-click on a cable deletes it. JUCE sends this after the SECOND mouseUp, so by now
+// the first click has selected the cable (and the second may already have hit the x badge,
+// in which case there is no cable left here and nothing happens).
+void CanvasView::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() || e.mods.isMiddleButtonDown())
+        return;
+
+    if (const auto cable = cableAt (e.position))
+    {
+        controller.disconnectPair (cable->src, cable->dst);   // every edge of the pair, one rewire
+        selection.reset();
+        pressedCable.reset();
+        repaint();
+    }
+}
+
+void CanvasView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    if ((e.mods.isCommandDown() || e.mods.isCtrlDown()) && onZoomBy)
+    {
+        const float delta = wheel.deltaY != 0.0f ? wheel.deltaY : wheel.deltaX;
+        if (delta == 0.0f)
             return;
-        }
+        // A mouse-wheel notch is one zoom step; a smooth (trackpad) stream scales with it.
+        const float factor = wheel.isSmooth ? std::pow (kZoomStep, delta * 4.0f)
+                                            : (delta > 0.0f ? kZoomStep : 1.0f / kZoomStep);
+        onZoomBy (factor, e.getScreenPosition());
+        return;
     }
+
+    juce::Component::mouseWheelMove (e, wheel);   // plain wheel: let the viewport scroll
 }
 
-void CanvasView::mouseDrag (const juce::MouseEvent& e)
+void CanvasView::mouseMagnify (const juce::MouseEvent& e, float scaleFactor)
 {
-    if (! draggingWire)
-        return;
+    if (onZoomBy)
+        onZoomBy (scaleFactor, e.getScreenPosition());
+}
 
-    wireEnd = e.position;
-    // Validity only depends on the hovered target, not the cursor position —
-    // re-run the (cycle-DFS) validation only when the target actually changes,
-    // not on every mouse-move event.
-    if (const juce::String dst = inputPortAt (wireEnd); dst != hoverDstUid)
+bool CanvasView::keyPressed (const juce::KeyPress& key)
+{
+    if ((key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) && selection.has_value())
     {
-        hoverDstUid = dst;
-        hoverValid  = dst.isNotEmpty() && dst != wireSrcUid
-                      && controller.canConnectPair (wireSrcUid, dst);
+        deleteSelectedCable();
+        return true;
     }
-    repaint();
-}
 
-void CanvasView::mouseUp (const juce::MouseEvent&)
-{
-    if (! draggingWire)
-        return;
+    if (key == juce::KeyPress::escapeKey)
+    {
+        draggingWire = false;
+        hoverDstUid  = {};
+        hoverValid   = false;
+        selection.reset();
+        repaint();
+        return true;
+    }
 
-    if (hoverValid)
-        controller.connectPair (wireSrcUid, hoverDstUid);   // atomic stereo pair, one rewire
-
-    draggingWire = false;
-    wireSrcUid   = {};
-    hoverDstUid  = {};
-    hoverValid   = false;
-    repaint();
+    if (key.getModifiers().isCommandDown())
+    {
+        // Match the key code AND the typed character: on a Czech layout "+" and "0" are
+        // reached via different physical keys than on a US one.
+        const int code = key.getKeyCode();
+        const juce::juce_wchar ch = key.getTextCharacter();
+        const bool zoomIn    = code == '=' || code == '+' || code == juce::KeyPress::numberPadAdd      || ch == '+' || ch == '=';
+        const bool zoomOut   = code == '-' || code == juce::KeyPress::numberPadSubtract                || ch == '-';
+        const bool zoomReset = code == '0' || code == juce::KeyPress::numberPad0                       || ch == '0';
+        if (zoomIn && onZoomBy)        { onZoomBy (kZoomStep, std::nullopt);        return true; }
+        if (zoomOut && onZoomBy)       { onZoomBy (1.0f / kZoomStep, std::nullopt); return true; }
+        if (zoomReset && onZoomReset)  { onZoomReset();                              return true; }
+    }
+    return false;
 }
 
 //== Layout ====================================================================
 void CanvasView::resized()
 {
+    if (suppressPlacement)
+        return;
     for (const auto& v : views)
         placeNode (*v.comp, v.uid);
-
-    addSlot.setBounds (16, 16, 70, 60);
 }
 
 //== Paint =====================================================================
@@ -465,12 +650,21 @@ void CanvasView::paint (juce::Graphics& g)
     g.setGradientFill (bg);
     g.fillAll();
 
+    const auto cables = buildCables();
+    std::optional<Cable> sel;
+    if (selection.has_value())
+        for (const auto& c : cables)
+            if (c.src == selection->src && c.dst == selection->dst)
+                sel = c;
+
     // Cables (behind the node cards, which are child components).
-    for (const auto& cable : buildCables())
+    for (const auto& cable : cables)
     {
+        const bool isSelected = sel.has_value() && sel->src == cable.src && sel->dst == cable.dst;
         const auto path = cablePath (cable.a, cable.b);
-        g.setColour (kCableIdle);
-        g.strokePath (path, juce::PathStrokeType (2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (isSelected ? LightHostLookAndFeel::accent() : kCableIdle);
+        g.strokePath (path, juce::PathStrokeType (isSelected ? 3.4f : 2.4f,
+                                                  juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         // Traveling signal-flow dot.
         const float len = path.getLength();
@@ -481,6 +675,14 @@ void CanvasView::paint (juce::Graphics& g)
             g.fillEllipse (dot.x - 3.0f, dot.y - 3.0f, 6.0f, 6.0f);
         }
     }
+
+    // Wire drop target: outline the whole node (the drop zone), not just its port.
+    if (draggingWire && hoverDstUid.isNotEmpty())
+        if (const auto* v = viewForUid (hoverDstUid))
+        {
+            g.setColour ((hoverValid ? kValidGreen : kInvalidRed).withAlpha (0.85f));
+            g.drawRoundedRectangle (v->comp->getBounds().toFloat().expanded (5.0f), 13.0f, 2.0f);
+        }
 
     // Ports.
     for (const auto& v : views)
@@ -501,6 +703,20 @@ void CanvasView::paint (juce::Graphics& g)
             else
                 g.fillEllipse (pt.x - 4.0f, pt.y - 4.0f, 8.0f, 8.0f);
         }
+    }
+
+    // Delete badge on the selected cable.
+    if (sel.has_value())
+    {
+        const auto selPath = cablePath (sel->a, sel->b);
+        const auto badge = selPath.getPointAlongPath (selPath.getLength() * 0.5f);
+        const auto r = juce::Rectangle<float> (kBadgeRadius * 2.0f, kBadgeRadius * 2.0f).withCentre (badge);
+        g.setColour (LightHostLookAndFeel::nodeTop());
+        g.fillEllipse (r);
+        g.setColour (LightHostLookAndFeel::accent());
+        g.drawEllipse (r, 1.5f);
+        g.setFont (LightHostLookAndFeel::display (14.0f));
+        g.drawText (juce::String::fromUTF8 ("\xc3\x97"), r, juce::Justification::centred);   // ×
     }
 
     // Rubber-band cable while dragging a new connection.

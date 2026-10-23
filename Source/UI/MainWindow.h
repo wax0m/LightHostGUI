@@ -18,7 +18,7 @@ class MainWindow : public juce::DocumentWindow
 {
 public:
     MainWindow (GraphController& controller, const PresetStore& store, MainComponent::Callbacks callbacks)
-        : juce::DocumentWindow ("Light Host",
+        : juce::DocumentWindow ("LightHost GUI",
                                 LightHostLookAndFeel::appBg(),
                                 juce::DocumentWindow::minimiseButton | juce::DocumentWindow::maximiseButton | juce::DocumentWindow::closeButton)
     {
@@ -40,6 +40,7 @@ public:
 
     void refreshChain()   { if (content != nullptr) content->refreshChain(); }
     void refreshPresets() { if (content != nullptr) content->refreshPresets(); }
+    void revealNode (const juce::String& uid) { if (content != nullptr) content->revealNode (uid); }
 
     // Hide to tray instead of quitting — the engine keeps running in the background.
     void closeButtonPressed() override

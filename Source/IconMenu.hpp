@@ -20,13 +20,17 @@ ApplicationProperties& getAppProperties();
 class IconMenu : public SystemTrayIconComponent, private Timer, public ChangeListener
 {
 public:
-    IconMenu();
+    explicit IconMenu (juce::String startupWarning = {});
     ~IconMenu() override;
     void mouseDown (const MouseEvent&) override;
     static void menuInvocationCallback (int id, IconMenu*);
     void changeListenerCallback (ChangeBroadcaster* changed) override;
 
     const int INDEX_PRESET;
+
+    // Idempotent. Closes editors, saves, then stops the audio device so the graph and
+    // plugin instances are never destroyed while the device still calls into them.
+    void shutdownCleanly();
 
 private:
     void timerCallback() override;
@@ -59,6 +63,8 @@ private:
     AudioProcessorPlayer player;
     GraphController controller { graph, formatManager };
     PresetStore store;
+    bool isShutDown = false;
+    String presetsWarning;   // set by loadPresets() when the saved presets were unreadable
     #if JUCE_WINDOWS
     int x, y;
     #endif

@@ -22,6 +22,7 @@
 #include "PluginBuses.h"
 #include "MonoInputProcessor.h"
 #include "MixProcessor.h"
+#include "OutputGuardProcessor.h"
 
 class GraphController
 {
@@ -39,6 +40,10 @@ public:
     //==============================================================================
     void loadFrom (PropertiesFile&);   // reads "graphDocument", migrates legacy settings if absent
     void save (PropertiesFile&);       // captures live plugin states, persists XML
+    // Non-empty when the last loadFrom() found an unreadable saved graph: a copy was kept
+    // (see SettingsBackup.h) and the controller started from defaults.
+    String getLoadWarning() const { return loadWarning; }
+    bool didMigrateOnLoad() const noexcept { return migratedOnLoad; }   // loadFrom() read a v1 (normalised) graph
 
     //==============================================================================
     // Serial-chain operations (tray menu)
@@ -172,7 +177,7 @@ private:
     void captureStates();                    // live plugin states -> document
     std::vector<String> getChainUids() const;            // audioIn .. audioOut, doc order
     void rewriteChainConnections (const std::vector<String>& chainUids);
-    juce::Point<float> placementForNewNode() const;   // right of the rightmost plugin, never stacked
+    String addPluginNodeAtNextSlot (const PluginDescription&);   // document node only, placed by placeNewPlugin
     // Instantiate ONE plugin document node into the live graph (PassThrough stand-in
     // + missingPlugins entry when the plugin can't load) and register it in
     // uidToNodeId. Shared by rebuildNow and the incremental add paths.
@@ -186,6 +191,10 @@ private:
     // Meter plumbing (runtime only).
     void insertMasterMeters();
     MeterProcessor* spliceMeterBefore (AudioProcessorGraph::NodeID target);
+    OutputGuardProcessor* spliceGuardBefore (AudioProcessorGraph::NodeID target);
+    // Shared body: redirect every X -> target connection through a new Proc node.
+    template <typename Proc>
+    AudioProcessorGraph::Node* spliceProcBefore (AudioProcessorGraph::NodeID target);
     MeterProcessor* spliceMeterAfter  (AudioProcessorGraph::NodeID source);
 
     void insertNodeStrips();
@@ -211,6 +220,8 @@ private:
     bool monoInput = false;                             // sum input to mono, feed both channels
     MonoInputProcessor* monoNode = nullptr;             // runtime mono-collapse node (graph-owned)
     // Reentrant-rebuild coalescing — see the comment on rebuild() in the .cpp.
+    String loadWarning;
+    bool migratedOnLoad = false;
     bool rebuilding = false;
     bool rebuildPending = false;
 

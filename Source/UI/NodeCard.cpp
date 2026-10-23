@@ -22,14 +22,15 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
 
     addAndMakeVisible (knobA);
     addAndMakeVisible (knobB);
-    addChildComponent (knobC);   // host-mode Mix knob; shown by setupGainPanKnobs()
+    addChildComponent (knobC);   // dry/wet Mix knob; shown on every live card by setupMixKnob()
     addAndMakeVisible (meterL);
     addAndMakeVisible (meterR);
 
     // A MISSING plugin has no live instance to drive: show no knobs (just the
     // header + inert meter). Otherwise prefer the hosted plugin's own parameters
     // (Freq, Gain, Ratio, …) on the card, falling back to the host gain/pan strip
-    // when the plugin exposes none.
+    // when the plugin exposes none. Every live card also gets the dry/wet Mix knob
+    // as its last column (parallel compression, reverb blends, ...).
     if (missing)
     {
         knobA.setVisible (false);
@@ -39,6 +40,9 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
         setupPluginParamKnobs (cardParams);
     else
         setupGainPanKnobs();
+
+    if (! missing)
+        setupMixKnob();
 
     applyBypassLook();
     setSize (cardWidth, cardHeight);
@@ -68,7 +72,10 @@ void NodeCard::setupGainPanKnobs()
     };
     knobB.onValueChange = [this] (double v) { controller.setNodePan (uid, (float) v); };
     knobB.setVisible (true);
+}
 
+void NodeCard::setupMixKnob()
+{
     // Mix: dry/wet blend around the plugin. 100 % = fully wet (plugin only) is the
     // default and the plain topology; the engine builds the parallel dry branch only
     // while the knob is below 100 %.
@@ -179,6 +186,15 @@ void NodeCard::updateMeters()
     refreshParamReadouts();
 }
 
+// Same width as the title text area in paint().
+void NodeCard::updateNameTooltip()
+{
+    const int switchesLeft = showMidi ? midiRect.getX() : bypassRect.getX();
+    const float titleWidth = (float) (switchesLeft - statusDotRect.getRight() - 14);
+    const bool cut = juce::GlyphArrangement::getStringWidth (LightHostLookAndFeel::display (13.5f, true), name) > titleWidth;
+    setTooltip (cut ? name : juce::String());
+}
+
 void NodeCard::resized()
 {
     const int pad = 15;
@@ -196,6 +212,8 @@ void NodeCard::resized()
     }
     else
         midiRect = {};
+
+    updateNameTooltip();
 
     r.removeFromTop (14);   // divider band
 
@@ -351,6 +369,10 @@ void NodeCard::paint (juce::Graphics& g)
 
 void NodeCard::mouseDown (const juce::MouseEvent& e)
 {
+    if (forwardMiddleToParent (*this, e, &juce::Component::mouseDown))
+        return;
+    if (auto* parent = getParentComponent())
+        parent->grabKeyboardFocus();   // so Delete / Ctrl +,-,0 reach the canvas after a card click
     if (bypassRect.contains (e.getPosition()))
     {
         bypassed = ! bypassed;
@@ -380,6 +402,8 @@ void NodeCard::mouseDown (const juce::MouseEvent& e)
 
 void NodeCard::mouseDrag (const juce::MouseEvent& e)
 {
+    if (forwardMiddleToParent (*this, e, &juce::Component::mouseDrag))
+        return;
     if (! nodeDragActive)
         return;
     const auto p = e.getEventRelativeTo (getParentComponent()).getPosition();
@@ -388,8 +412,10 @@ void NodeCard::mouseDrag (const juce::MouseEvent& e)
     if (onDragMove) onDragMove (uid, delta);
 }
 
-void NodeCard::mouseUp (const juce::MouseEvent&)
+void NodeCard::mouseUp (const juce::MouseEvent& e)
 {
+    if (forwardMiddleToParent (*this, e, &juce::Component::mouseUp))
+        return;
     if (nodeDragActive)
     {
         nodeDragActive = false;

@@ -27,7 +27,15 @@ PresetStore PresetStore::fromXml (const String& xml)
     {
         ValueTree tree = ValueTree::fromXml (*parsed);
         if (tree.hasType (idPresets))
+        {
+            for (auto preset : tree)
+            {
+                auto graph = preset.getChildWithName (idGraph);
+                if (graph.isValid() && GraphDocument::migrateTree (graph))
+                    s.migratedOnLoad = true;
+            }
             s.state = tree;
+        }
     }
     return s;
 }
@@ -94,6 +102,7 @@ GraphDocument PresetStore::getPresetDocument (int index) const
         return GraphDocument();                            // empty default
     GraphDocument doc;
     doc.state = g.createCopy();                            // deep copy out
+    GraphDocument::migrateTree (doc.state);                // no-op unless it is a v1 tree
     return doc;
 }
 

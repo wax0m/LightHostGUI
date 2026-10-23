@@ -6,7 +6,7 @@ cmake_policy(SET CMP0091 NEW)
 
 # LightHostGUI — a GUI fork of upstream LightHost (https://github.com/opencma/LightHost).
 # Re-stamped as a fresh 1.0.0 identity; forked from LightHost 1.3.0.
-project(LightHostGUI VERSION 1.0.0
+project(LightHostGUI VERSION 1.1.0
         DESCRIPTION "GUI fork of upstream LightHost 1.3.0"
         LANGUAGES C CXX)
 
@@ -98,7 +98,7 @@ target_compile_definitions(LightHost PRIVATE
     # (debug-only; no effect on Release).
     JUCE_DISABLE_AUDIOPROCESSOR_BEGIN_END_GESTURE_CHECKING=1
 
-    JUCE_DISPLAY_SPLASH_SCREEN=0    # allowed: this project is GPLv3
+    JUCE_DISPLAY_SPLASH_SCREEN=0    # JUCE 8 has no splash-screen requirement
 
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:LightHost,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LightHost,JUCE_VERSION>"
@@ -155,6 +155,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/MidiTests.cpp
         Tests/PresetTests.cpp
         Tests/MixTests.cpp
+        Tests/SettingsTests.cpp
         Source/Engine/GraphDocument.cpp
     )
 

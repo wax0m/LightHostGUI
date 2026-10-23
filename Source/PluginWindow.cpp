@@ -41,7 +41,7 @@ void PluginWindow::closeAllCurrentlyOpenWindows()
             delete activePluginWindows.getUnchecked (i);
 
         Component dummyModalComp;
-        dummyModalComp.enterModalState();
+        dummyModalComp.enterModalState (false); // only blocks input during the pump; it is never on screen, so no keyboard focus
         MessageManager::getInstance()->runDispatchLoopUntil (50);
 
         // The pump above can dispatch queued callbacks (e.g. a pending tray "Edit")

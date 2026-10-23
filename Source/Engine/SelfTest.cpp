@@ -5,6 +5,7 @@
 #include "SelfTest.h"
 #include "GraphController.h"
 #include "PresetStore.h"
+#include "NodeGeometry.h"
 
 using namespace juce;
 
@@ -1075,9 +1076,9 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         const String uid2 = controller.appendToChain (pA);   // two instances of pA is fine
         r.expect (uid1.isNotEmpty() && uid2.isNotEmpty(), "two plugins instantiated");
 
-        // Distinct, non-default positions (getNodeX/Y default to 0.5f, so avoid 0.5).
-        controller.setNodePosition (uid1, 0.1f, 0.2f);
-        controller.setNodePosition (uid2, 0.8f, 0.9f);
+        // Distinct, non-default positions (px; the fallback for a missing position is (400, 260)).
+        controller.setNodePosition (uid1, 300.0f, 200.0f);
+        controller.setNodePosition (uid2, 900.0f, 500.0f);
 
         // A structural edit: add a third node then remove it.
         const String uid3 = controller.appendToChain (pA);
@@ -1085,9 +1086,9 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         controller.removeNode (uid3);
 
         const auto eq = [] (float a, float b) { return std::abs (a - b) < 1.0e-6f; };
-        r.expect (eq (controller.getNodeX (uid1), 0.1f) && eq (controller.getNodeY (uid1), 0.2f),
+        r.expect (eq (controller.getNodeX (uid1), 300.0f) && eq (controller.getNodeY (uid1), 200.0f),
                   "node 1 position unchanged after append + remove");
-        r.expect (eq (controller.getNodeX (uid2), 0.8f) && eq (controller.getNodeY (uid2), 0.9f),
+        r.expect (eq (controller.getNodeX (uid2), 900.0f) && eq (controller.getNodeY (uid2), 500.0f),
                   "node 2 position unchanged after append + remove");
 
         controller.save (*settings);
@@ -1437,8 +1438,8 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     }
 
     // Test O (cont.) — placement reads positions through the document accessors, so a node
-    //          that has no x/y property is treated as sitting at the accessor default
-    //          (0.5, 0.5) and a new add never lands on top of it.
+    //          that has no x/y property is treated as sitting at the accessor fallback
+    //          (400, 260 px) and a new add never lands on top of it.
     {
         GraphFixture fx (formatManager, "placementdefault");
         GraphController& controller = *fx.controller;
@@ -1447,17 +1448,18 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         const String b = controller.addNodeUnconnected (pA);
         r.expect (a.isNotEmpty() && b.isNotEmpty(), "placement-default plugins instantiated");
 
-        // a sits at x = 0.38, so the next add would target x = 0.5; b has no position at all
-        // and is therefore at the default (0.5, 0.5) — exactly where that add would land.
-        controller.setNodePosition (a, 0.38f, 0.2f);
+        // b has no position at all and is therefore at the fallback (400, 260); a sits one slot
+        // to its left, so the next add must still keep clear of both.
+        controller.setNodePosition (a, 130.0f, 260.0f);
         ValueTree bTree = controller.document.getNodeByUid (b);
         bTree.removeProperty ("x", nullptr);
         bTree.removeProperty ("y", nullptr);
 
         const String c = controller.addNodeUnconnected (pA);
         r.expect (c.isNotEmpty(), "third plugin instantiated");
-        const bool onTopOfB = std::abs (controller.getNodeX (c) - 0.5f) < 0.05f
-                           && std::abs (controller.getNodeY (c) - 0.5f) < 0.05f;
+        const auto rectOf = [&] (const String& uid)
+        { return lighthost::geometry::nodeRect (false, { controller.getNodeX (uid), controller.getNodeY (uid) }); };
+        const bool onTopOfB = rectOf (c).intersects (rectOf (b)) || rectOf (c).intersects (rectOf (a));
         r.expect (! onTopOfB, "a new node does not land on a node that has no stored position");
 
     }
@@ -1483,6 +1485,11 @@ int runSelfTest (const StringArray& explicitPluginPaths)
 
         String p1, p2, p3;
         r.expect (publishesDuring ([&] { p1 = controller.addPlugin (pA); }) == 1, "addPlugin (serial append) publishes once");
+        {
+            const String outUid = controller.document.getIoNodeUid (false);
+            r.expect (controller.getNodeX (outUid) >= controller.getNodeX (p1) + (float) lighthost::geometry::nodeSlot,
+                      "addPlugin puts OUT right of the new card (position change publishes nothing extra)");
+        }
         p2 = controller.addPlugin (pA);
         p3 = controller.addPlugin (pA);
         r.expect (p1.isNotEmpty() && p2.isNotEmpty() && p3.isNotEmpty(), "publish-test plugins instantiated");
@@ -1586,6 +1593,101 @@ int runSelfTest (const StringArray& explicitPluginPaths)
                   "noise reaches the output through the recovered chain");
 
         controller.save (*settings);
+    }
+
+    //==========================================================================
+    // Test R — output guard + sanitised values. Exactly one OutputGuardProcessor sits in
+    //          the live graph after load and after a rewire (rewire must sweep the old
+    //          one). A document whose node gain was corrupted to 1000 loads with the live
+    //          strip at <= 2. The publish count per gesture is Test P's job and is
+    //          unchanged: the guard is spliced inside the same single rewire publish.
+    //==========================================================================
+    std::cout << "\n[R] output guard + sanitised persisted values" << std::endl;
+    {
+        GraphFixture fx (formatManager, "outputguard");
+        GraphController& controller = *fx.controller;
+        AudioProcessorGraph& graph = fx.graph;
+
+        const auto countGuards = [&graph]
+        {
+            int n = 0;
+            for (auto* node : graph.getNodes())
+                if (dynamic_cast<OutputGuardProcessor*> (node->getProcessor()) != nullptr)
+                    ++n;
+            return n;
+        };
+
+        r.expect (countGuards() == 1, "exactly one OutputGuardProcessor after load");
+
+        const String uid = controller.addPlugin (pA);
+        r.expect (uid.isNotEmpty(), "guard-test plugin instantiated");
+        r.expect (countGuards() == 1, "exactly one OutputGuardProcessor after addPlugin");
+
+        controller.setNodeGain (uid, 0.5f);
+        r.expect (countGuards() == 1, "exactly one OutputGuardProcessor after a gain edit");
+
+        controller.setMonoInput (true);
+        controller.setMonoInput (false);
+        r.expect (countGuards() == 1, "exactly one OutputGuardProcessor after repeated rewires");
+
+        // Corrupt the persisted gain the way a hand-edited file would.
+        GraphDocument corrupt = controller.snapshotDocument();
+        corrupt.getNodeByUid (uid).setProperty ("gain", 1000.0f, nullptr);
+        controller.loadDocument (corrupt);
+
+        float liveGain = -1.0f;
+        for (auto* node : graph.getNodes())
+            if (auto* strip = dynamic_cast<NodeStripProcessor*> (node->getProcessor()))
+                liveGain = jmax (liveGain, strip->getGain());
+        r.expect (liveGain >= 0.0f && liveGain <= 2.0f, "live strip gain is clamped to <= 2 after loading gain 1000");
+        r.expect (controller.getNodeGain (uid) <= 2.0f, "controller reports the clamped gain");
+        r.expect (countGuards() == 1, "exactly one OutputGuardProcessor after loadDocument");
+
+        controller.save (*fx.settings);
+    }
+
+    //==========================================================================
+    // Test S — unreadable saved graph is backed up, never silently overwritten.
+    //          A broken "graphDocument" must leave a backup file + settings key holding the
+    //          original text, start from a valid default document and set a warning;
+    //          a valid document must produce neither a backup nor a warning.
+    //==========================================================================
+    std::cout << "\n[S] unreadable settings are backed up" << std::endl;
+    {
+        const auto backupsFor = [] (const File& settingsFile)
+        {
+            return settingsFile.getParentDirectory().findChildFiles (File::findFiles, false,
+                settingsFile.getFileNameWithoutExtension() + ".graphDocument-unreadable-*.xml");
+        };
+
+        const String broken = "<GRAPH broken";
+        {
+            GraphFixture fx (formatManager, "unreadablesettings");
+            for (auto& f : backupsFor (fx.file)) f.deleteFile();
+
+            // Valid document first: no backup, no warning.
+            fx.controller->save (*fx.settings);
+            GraphController good (fx.graph, formatManager);
+            good.loadFrom (*fx.settings);
+            r.expect (good.getLoadWarning().isEmpty(), "valid document: no warning");
+            r.expect (backupsFor (fx.file).isEmpty(), "valid document: no backup file");
+
+            // Now corrupt it.
+            fx.settings->setValue ("graphDocument", broken);
+            GraphController bad (fx.graph, formatManager);
+            bad.loadFrom (*fx.settings);
+
+            const auto backups = backupsFor (fx.file);
+            r.expect (backups.size() == 1, "broken document: one backup file written");
+            r.expect (backups.size() == 1 && backups.getReference (0).loadFileAsString() == broken,
+                      "broken document: the backup holds the original text");
+            r.expect (fx.settings->getValue ("graphDocument.unreadable") == broken,
+                      "broken document: settings key holds the original text");
+            r.expect (bad.getLoadWarning().isNotEmpty(), "broken document: warning is set");
+            r.expect (bad.snapshotDocument().isValid(), "broken document: started from a valid default document");
+
+            for (auto& f : backups) f.deleteFile();
+        }
     }
 
     //==========================================================================

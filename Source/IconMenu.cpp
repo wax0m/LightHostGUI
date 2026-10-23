@@ -10,6 +10,7 @@
 #include <JuceHeader.h>
 #include "IconMenu.hpp"
 #include "PluginWindow.h"
+#include "Engine/SettingsBackup.h"
 #include "UI/MainWindow.h"
 #if JUCE_WINDOWS
 #include "Windows.h"
@@ -67,7 +68,7 @@ private:
     IconMenu& owner;
 };
 
-IconMenu::IconMenu() : INDEX_PRESET (6000000)
+IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
 {
     // Initialization
     addDefaultFormatsToManager (formatManager);   // JUCE 8: replaces AudioPluginFormatManager::addDefaultFormats()
@@ -96,22 +97,68 @@ IconMenu::IconMenu() : INDEX_PRESET (6000000)
     controller.setMonoInput (getAppProperties().getUserSettings()->getBoolValue ("monoInput", false));
     // Presets: load the store, or seed a "Default" from the just-loaded graph.
     loadPresets();
+
+    // A v1.0 build would read a v2 graph as px values clamped to 1 (every node bottom-right), so keep the
+    // v1 file once, before the first save can rewrite it. No dialog: the migration itself is lossless.
+    if (controller.didMigrateOnLoad() || store.migratedOnLoad)
+        lighthost::copySettingsFileAside (*getAppProperties().getUserSettings(), "v1");
+
+    // One non-modal notice for whatever could not be read (the backups are already written).
+    const auto warning = (startupWarning + "\n\n" + controller.getLoadWarning() + "\n\n" + presetsWarning).trim();
+    if (warning.isNotEmpty())
+        AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Light Host", warning);
+
     setIcon();
     setIconTooltip (JUCEApplication::getInstance()->getApplicationName());
 }
 
 IconMenu::~IconMenu()
 {
-    deviceManager.removeMidiInputDeviceCallback ({}, &player);
+    shutdownCleanly();
+}
+
+void IconMenu::shutdownCleanly()
+{
+    if (isShutDown)
+        return;
+    isShutDown = true;
+
+    // UI stops polling the controller before anything below is torn down.
+    stopTimer();
+    mainWindow = nullptr;
+    pluginListWindow = nullptr;
+
+    // Close editors BEFORE saving: some plugins update their state when the editor closes.
+    PluginWindow::closeAllCurrentlyOpenWindows();
+
     persistPresets();
     controller.save (*getAppProperties().getUserSettings());
+
+    // Stop the device before the graph and plugin instances are destroyed.
+    deviceManager.removeMidiInputDeviceCallback ({}, &player);
+    deviceManager.removeAudioCallback (&player);
+    player.setProcessor (nullptr);
+    deviceManager.closeAudioDevice();
 }
 
 //== Presets ===================================================================
 void IconMenu::loadPresets()
 {
     auto& settings = *getAppProperties().getUserSettings();
-    store = PresetStore::fromXml (settings.getValue ("presets"));
+    const String rawPresets = settings.getValue ("presets");
+    store = PresetStore::fromXml (rawPresets);
+
+    // An empty value is a normal first run; a non-empty one that doesn't parse would be
+    // overwritten by the re-seeded "Default" on the next save, so keep a copy first.
+    presetsWarning = {};
+    if (rawPresets.isNotEmpty() && ! store.isValid())
+    {
+        const auto backup = lighthost::backupUnreadable (settings, "presets", rawPresets);
+        presetsWarning = "Your saved presets could not be read. "
+                       + (backup != File() ? "A copy was kept at " + backup.getFullPathName() + ". "
+                                           : String ("It could not be copied either. "))
+                       + "The app started with defaults.";
+    }
 
     // Migration / first run: never leave the store empty — seed a "Default" preset
     // from the current live document so an existing chain is preserved as a scene.
@@ -482,11 +529,14 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     {
         const auto knownTypes = im->knownPluginList.getTypes();
         const PluginDescription plugin = knownTypes[KnownPluginList::getIndexChosenByMenu (knownTypes, id)];
-        im->controller.addPlugin (plugin);
+        const String uid = im->controller.addPlugin (plugin);
         im->controller.save (settings);
         // Reflect the chain change in the open editor window, then update the menu.
         if (im->mainWindow != nullptr)
+        {
             im->mainWindow->refreshChain();
+            im->mainWindow->revealNode (uid);
+        }
         im->startTimer (50);
     }
 }
@@ -568,10 +618,13 @@ void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
             // addPlugin appends serially on a linear chain and adds unconnected on a
             // branched graph (never linearizes parallel routing) — decided in the
             // controller so every add entry point shares the policy.
-            controller.addPlugin (types[idx]);
+            const String uid = controller.addPlugin (types[idx]);
             controller.save (*getAppProperties().getUserSettings());
             if (mainWindow != nullptr)
+            {
                 mainWindow->refreshChain();
+                mainWindow->revealNode (uid);   // the floating ADD may be far from the new node
+            }
         });
 }
 
