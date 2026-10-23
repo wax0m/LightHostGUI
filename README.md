@@ -95,6 +95,11 @@ Third-party components:
 - VST 3 SDK: MIT (bundled with JUCE 8.0.13)
 - ASIO SDK: GPLv3 option, only in builds made with `ASIO_SDK_DIR`
 - Plug icon by Bogdan Rosu (flaticon.com): CC BY 3.0
+- Libraries compiled in through JUCE (FLAC, Ogg Vorbis, libjpeg, libpng, zlib, HarfBuzz, SheenBidi): see
+  [`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt) for their notices and licence texts
+
+VST is a registered trademark of Steinberg Media Technologies GmbH. ASIO is a trademark and software of
+Steinberg Media Technologies GmbH. Other product names are trademarks of their respective owners.
 
 ## Credits
 
