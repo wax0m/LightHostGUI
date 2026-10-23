@@ -131,10 +131,11 @@ void MainComponent::applyZoom (float z)
 
 void MainComponent::layoutOverlays()
 {
-    const auto vp = viewport.getBounds();
+    const auto vp  = viewport.getBounds();
+    const int  bar = viewport.getScrollBarThickness();   // reserved whether or not a bar is visible
     addButton.setBounds (vp.getX() + 16, vp.getY() + 16, 70, 60);
-    zoomControls.setBounds (vp.getX() + viewport.getViewWidth()  - ZoomControls::preferredWidth  - 14,
-                            vp.getY() + viewport.getViewHeight() - ZoomControls::preferredHeight - 14,
+    zoomControls.setBounds (vp.getRight()  - bar - 14 - ZoomControls::preferredWidth,
+                            vp.getBottom() - bar - 14 - ZoomControls::preferredHeight,
                             ZoomControls::preferredWidth, ZoomControls::preferredHeight);
 }
 
