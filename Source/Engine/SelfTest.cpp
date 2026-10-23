@@ -1788,6 +1788,23 @@ int runSelfTest (const StringArray& explicitPluginPaths)
                   "a second replace keeps the first prevState");
         r.expect (sameEdges (edgesBefore, controller.getConnections()), "second replace keeps the wiring");
 
+        // 5. Empty state + fallbackState (a node re-added from a stale VST2 entry; the original sits in the
+        //    legacy settings key): the import still happens and the fallback is kept as prevState.
+        {
+            const String blankUid = controller.appendToChain (oldVst2);
+            r.expect (blankUid.isNotEmpty() && controller.isMissing (blankUid)
+                      && controller.document.getPluginState (blankUid).isEmpty(), "stateless stand-in created");
+            before = controller.getPublishCount();
+            const auto viaFallback = controller.replacePlugin (blankUid, pA, &bank);
+            r.expect (viaFallback.ok, "replace of a stateless stand-in with a fallback succeeds");
+            r.expect (controller.getPublishCount() - before == 1, "fallback replace publishes exactly once");
+            if (pA.pluginFormatName == "VST3" && controller.getNodeParameters (blankUid, false).size() >= 2)
+                r.expect (viaFallback.import == GraphController::ReplaceResult::Import::paramsByIndex
+                          && viaFallback.changedParams >= 1, "the fallback state is imported by position");
+            r.expect (controller.document.getPreviousPluginState (blankUid) == bank.toBase64Encoding(),
+                      "prevState holds the fallback state");
+        }
+
         controller.save (*fx.settings);
     }
 

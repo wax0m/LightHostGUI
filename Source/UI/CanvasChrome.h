@@ -133,8 +133,6 @@ public:
             stopTimer();
     }
 
-    bool isShowing() const noexcept { return isTimerRunning(); }
-
     void paint (juce::Graphics& g) override
     {
         auto b = getLocalBounds().toFloat().reduced (0.5f);

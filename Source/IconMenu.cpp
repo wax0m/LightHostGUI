@@ -683,6 +683,23 @@ void IconMenu::showReplacePluginMenu (const String& uid, juce::Point<int> screen
             const auto result = controller.replacePlugin (uid, types[idx], legacy.isEmpty() ? nullptr : &legacy);
             if (result.ok)
                 controller.save (settings);
+
+            // A by-position import goes through setValueNotifyingHost, which a split-component VST3 hands to
+            // its processor only in the next process block; the save above can still see defaults. One
+            // delayed save (no permanent timer) picks the values up; repeated replaces share it.
+            if (result.ok && result.import == GraphController::ReplaceResult::Import::paramsByIndex && ! deferredSavePending)
+            {
+                deferredSavePending = true;
+                auto* self = this;   // MSVC rejects `this` inside the nested init-capture
+                Timer::callAfterDelay (1000, [safe = Component::SafePointer<IconMenu> (self)]
+                {
+                    if (safe == nullptr)
+                        return;
+                    safe->deferredSavePending = false;
+                    if (! safe->isShutDown)
+                        safe->controller.save (*getAppProperties().getUserSettings());
+                });
+            }
             if (mainWindow != nullptr)
             {
                 if (result.ok)
