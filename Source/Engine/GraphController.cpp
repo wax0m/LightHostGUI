@@ -2,6 +2,7 @@
 #include "../PluginWindow.h"
 #include "SettingsBackup.h"
 #include "NodeGeometry.h"
+#include "NodePlacement.h"
 
 GraphController::GraphController (AudioProcessorGraph& g, AudioPluginFormatManager& fm)
     : graph (g), formatManager (fm)
@@ -410,52 +411,15 @@ std::vector<GraphController::ChainItem> GraphController::getChain() const
     return result;
 }
 
-// Place a new node one slot right of the current rightmost plugin (or of IN), then walk down past any
-// card it would overlap, so two cards never land on the same spot. Positions are node centres in px.
-juce::Point<float> GraphController::placementForNewNode() const
+// Adds the document node between the last card and OUT. Existing cards never move; OUT is pushed right when
+// it is in the way. Positions are GUI-only, so this publishes nothing.
+String GraphController::addPluginNodeAtNextSlot (const PluginDescription& desc)
 {
-    using namespace lighthost::geometry;
-    ValueTree nodes = document.getNodes();
-
-    float maxX = 0.0f;
-    float anchorY = defaultY;
-    bool  anyPlugin = false;
-    for (int i = 0; i < nodes.getNumChildren(); ++i)
-    {
-        const auto n = nodes.getChild (i);
-        if (n.getProperty ("type").toString() == GraphDocument::typePlugin)
-        {
-            // Positions go through the document accessors so the default for a node
-            // without x/y lives in one place (GraphDocument::getNodeX/getNodeY).
-            const String uid = n.getProperty ("uid").toString();
-            if (! anyPlugin || document.getNodeX (uid) > maxX)
-            {
-                maxX = document.getNodeX (uid);
-                anchorY = document.getNodeY (uid);
-            }
-            anyPlugin = true;
-        }
-    }
-
-    const auto occupied = [this, &nodes] (juce::Point<float> c)
-    {
-        const auto want = nodeRect (false, c).expanded ((float) nodeGap * 0.5f);
-        for (int i = 0; i < nodes.getNumChildren(); ++i)
-        {
-            const auto n = nodes.getChild (i);
-            if (n.getProperty ("type").toString() != GraphDocument::typePlugin)
-                continue;
-            const String uid = n.getProperty ("uid").toString();
-            if (want.intersects (nodeRect (false, { document.getNodeX (uid), document.getNodeY (uid) })))
-                return true;
-        }
-        return false;
-    };
-
-    juce::Point<float> p { (anyPlugin ? maxX : defaultInX) + (float) nodeSlot, anchorY };
-    for (int guard = 0; guard < 64 && occupied (p); ++guard)
-        p.y += (float) (cardHeight + nodeGap);
-    return { jmin (p.x, kMaxCoord), jmin (p.y, kMaxCoord) };
+    const auto placement = lighthost::placeNewPlugin (document);
+    const String uid = document.addPluginNode (desc, placement.centre.x, placement.centre.y);
+    if (placement.moveOutTo.has_value())
+        document.setNodePosition (document.getIoNodeUid (false), placement.moveOutTo->x, placement.moveOutTo->y);
+    return uid;
 }
 
 String GraphController::addPlugin (const PluginDescription& desc)
@@ -469,8 +433,7 @@ String GraphController::appendToChain (const PluginDescription& desc)
 {
     std::vector<String> chain = getChainUids();
 
-    const auto pos = placementForNewNode();
-    const String uid = document.addPluginNode (desc, pos.x, pos.y);
+    const String uid = addPluginNodeAtNextSlot (desc);
     chain.insert (chain.end() - 1, uid);   // before audioOut
     rewriteChainConnections (chain);
 
@@ -483,8 +446,7 @@ String GraphController::appendToChain (const PluginDescription& desc)
 
 String GraphController::addNodeUnconnected (const PluginDescription& desc)
 {
-    const auto pos = placementForNewNode();
-    const String uid = document.addPluginNode (desc, pos.x, pos.y);
+    const String uid = addPluginNodeAtNextSlot (desc);
     addPluginNodeToGraph (document.getNodeByUid (uid));
     rewireConnections();   // existing connections are untouched — nothing is rewritten serially
     return uidToNodeId.count (uid) > 0 ? uid : String();

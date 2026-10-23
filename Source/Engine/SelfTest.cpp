@@ -1485,6 +1485,11 @@ int runSelfTest (const StringArray& explicitPluginPaths)
 
         String p1, p2, p3;
         r.expect (publishesDuring ([&] { p1 = controller.addPlugin (pA); }) == 1, "addPlugin (serial append) publishes once");
+        {
+            const String outUid = controller.document.getIoNodeUid (false);
+            r.expect (controller.getNodeX (outUid) >= controller.getNodeX (p1) + (float) lighthost::geometry::nodeSlot,
+                      "addPlugin puts OUT right of the new card (position change publishes nothing extra)");
+        }
         p2 = controller.addPlugin (pA);
         p3 = controller.addPlugin (pA);
         r.expect (p1.isNotEmpty() && p2.isNotEmpty() && p3.isNotEmpty(), "publish-test plugins instantiated");

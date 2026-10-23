@@ -177,7 +177,7 @@ private:
     void captureStates();                    // live plugin states -> document
     std::vector<String> getChainUids() const;            // audioIn .. audioOut, doc order
     void rewriteChainConnections (const std::vector<String>& chainUids);
-    juce::Point<float> placementForNewNode() const;   // right of the rightmost plugin, never stacked
+    String addPluginNodeAtNextSlot (const PluginDescription&);   // document node only, placed by placeNewPlugin
     // Instantiate ONE plugin document node into the live graph (PassThrough stand-in
     // + missingPlugins entry when the plugin can't load) and register it in
     // uidToNodeId. Shared by rebuildNow and the incremental add paths.
