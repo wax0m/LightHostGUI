@@ -164,7 +164,7 @@ void CanvasView::rebuildViews()
             card->onDragEnd  = [this] (const juce::String& u) { persistNodePosition (u); };
             addAndMakeVisible (card);
             cards.add (card);
-            views.push_back ({ uid, card, true, true });
+            views.push_back ({ uid, card, /*hasInput*/ ! controller.document.isSourceNode (uid), /*hasOutput*/ true });
         }
     }
 }

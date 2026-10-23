@@ -605,23 +605,40 @@ void IconMenu::showMainWindow()
 
 void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
 {
-    const auto types = loadablePlugins();
+    // Effects keep the manufacturer-sorted list; instruments (sources, no audio input) get their own
+    // submenu with plain ids 1..N (the list ids start far above, so they can't collide).
+    Array<PluginDescription> effects, instruments;
+    for (const auto& t : loadablePlugins())
+        (GraphDocument::isSourceDescription (t) ? instruments : effects).add (t);
+
     PopupMenu m;
-    KnownPluginList::addToMenu (m, types, pluginSortMethod);
+    KnownPluginList::addToMenu (m, effects, pluginSortMethod);
+    if (! instruments.isEmpty())
+    {
+        PopupMenu synths;
+        for (int i = 0; i < instruments.size(); ++i)
+            synths.addItem (i + 1, instruments.getReference (i).name);
+        m.addSeparator();
+        m.addSubMenu ("Instruments", synths);
+    }
 
     m.showMenuAsync (PopupMenu::Options()
                         .withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }),
-        [this, types] (int r)
+        [this, effects, instruments] (int r)
         {
             if (r <= 0)
                 return;
-            const int idx = KnownPluginList::getIndexChosenByMenu (types, r);
-            if (idx < 0)
+            const PluginDescription* picked = nullptr;
+            if (r <= instruments.size())
+                picked = &instruments.getReference (r - 1);
+            else if (const int idx = KnownPluginList::getIndexChosenByMenu (effects, r); idx >= 0)
+                picked = &effects.getReference (idx);
+            if (picked == nullptr)
                 return;
             // addPlugin appends serially on a linear chain and adds unconnected on a
             // branched graph (never linearizes parallel routing) — decided in the
             // controller so every add entry point shares the policy.
-            const String uid = controller.addPlugin (types[idx]);
+            const String uid = controller.addPlugin (*picked);
             controller.save (*getAppProperties().getUserSettings());
             if (mainWindow != nullptr)
             {

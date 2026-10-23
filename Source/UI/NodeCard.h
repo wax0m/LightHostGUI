@@ -70,6 +70,7 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
+    bool isSource = false;   // instrument: no input port, no Mix knob
     void applyBypassLook();
     void updateNameTooltip();                                    // full plugin name when the title is elided
     void setupGainPanKnobs();                                    // host channel strip

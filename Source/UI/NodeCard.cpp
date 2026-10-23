@@ -15,6 +15,12 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
     if (format.isEmpty())
         format = missing ? "missing" : "VST3";
 
+    // An instrument is a source: no dry/wet mix, and the badge says so. The document decides, so a
+    // missing instrument still reads as one.
+    isSource = controller.document.isSourceNode (uid);
+    if (isSource)
+        format = "instrument " + juce::String::fromUTF8 ("Â·") + " " + format;
+
     // MIDI toggle: only for a live plugin that accepts MIDI. Reflects the
     // document's per-node receivesMidi flag (default on).
     showMidi = ! missing && controller.nodeAcceptsMidi (uid);
@@ -41,7 +47,7 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
     else
         setupGainPanKnobs();
 
-    if (! missing)
+    if (! missing && ! isSource)
         setupMixKnob();
 
     applyBypassLook();
