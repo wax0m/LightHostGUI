@@ -50,7 +50,7 @@ private:
     // enabling more channels later can't move the feed.
     lighthost::outputs::Layout currentOutputLayout() const;
     void applyDeviceLayout();                 // device opened / changed
-    void pinLegacyOutputs (bool alsoSave);    // one settings save when something was stamped
+    bool pinLegacyOutputs (bool alsoSave);    // one settings save when something was stamped; true if it did
     void persistPresets();                 // snapshot active + write settings
     void switchToPreset (int index);
     void addPreset();

@@ -96,7 +96,7 @@ namespace lighthost::outputs
         return b.isMain ? 0 : -1;
     }
 
-    // Where "unpinned" outputs get stamped: the first active pair of the open device.
+    // Where "unpinned" outputs get stamped: the first COMPLETE active pair (both channels) of the open device.
     struct PinTarget
     {
         int outCh = 0;
@@ -107,9 +107,12 @@ namespace lighthost::outputs
     {
         if (! layout.known)
             return std::nullopt;
-        const int ch = firstActiveOutput (layout.activeMask);
-        if (ch < 0)
-            return std::nullopt;
-        return PinTarget { ch, pairLabel (layout.names, ch), layout.deviceName };
+        // A pair the graph can't wire (one channel of it inactive) would leave the pinned OUT silent, so the
+        // first channel alone isn't enough; with no complete pair nothing is pinned and the main OUT stays
+        // unbound (first active channels, as before v1.2).
+        for (int ch = firstActiveOutput (layout.activeMask); ch >= 0; ch = layout.activeMask.findNextSetBit (ch + 1))
+            if (layout.activeMask[ch + 1])
+                return PinTarget { ch, pairLabel (layout.names, ch), layout.deviceName };
+        return std::nullopt;
     }
 }

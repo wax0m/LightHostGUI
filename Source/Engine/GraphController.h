@@ -115,7 +115,7 @@ public:
     // rewire time (never per block). A binding belongs to the device it was made on: on another device
     // the main OUT falls back to the first active pair and extra OUTs stay silent (see OutputPairs.h).
     // A layout change that moves some OUT rewires once (one publish); no plugin is reloaded.
-    void setOutputLayout (const lighthost::outputs::Layout&);
+    bool setOutputLayout (const lighthost::outputs::Layout&);   // true if the layout differed from the stored one
     const lighthost::outputs::Layout& getOutputLayout() const noexcept { return outputLayout; }
     // Stamp OUT nodes without a binding with the target (document only; the wiring doesn't change for the main OUT).
     bool pinLegacyOutputs (const lighthost::outputs::PinTarget&);

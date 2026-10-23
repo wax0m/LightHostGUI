@@ -339,13 +339,15 @@ void IconMenu::applyDeviceLayout()
 {
     if (isShutDown)
         return;
-    controller.setOutputLayout (currentOutputLayout());   // one rewire, only if some OUT's pair moved
-    pinLegacyOutputs (false);
-    if (mainWindow != nullptr)
+    // The device manager also reports unrelated changes (MIDI inputs...): rebuild the cards only when the
+    // layout or a binding really changed.
+    bool changed = controller.setOutputLayout (currentOutputLayout());   // one rewire, only if some OUT's pair moved
+    changed = pinLegacyOutputs (false) || changed;
+    if (changed && mainWindow != nullptr)
         mainWindow->refreshChain();   // OUT cards show active / inactive
 }
 
-void IconMenu::pinLegacyOutputs (bool alsoSave)
+bool IconMenu::pinLegacyOutputs (bool alsoSave)
 {
     bool changed = alsoSave;
     if (const auto target = lighthost::outputs::pinTarget (controller.getOutputLayout()))
@@ -358,6 +360,7 @@ void IconMenu::pinLegacyOutputs (bool alsoSave)
         persistPresets();
         controller.save (*getAppProperties().getUserSettings());
     }
+    return changed;
 }
 
 void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)

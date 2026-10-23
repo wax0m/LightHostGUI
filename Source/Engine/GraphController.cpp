@@ -804,7 +804,15 @@ void GraphController::insertMasterMeters()
 
         auto* meter = spliceMeterBefore (itOut->second, base);
         if (meter == nullptr)
+        {
+            // Can't happen short of an allocation failure; but this OUT's edges are still on its relative
+            // channels 0/1 and would alias onto the first pair, so cut them: silent beats misrouted.
+            jassertfalse;
+            for (const auto& c : graph.getConnections())
+                if (c.destination.nodeID == itOut->second)
+                    disconnectBatched (c);
             continue;
+        }
 
         outputMeters[outUid] = meter;
         if (isMain)
@@ -981,15 +989,16 @@ void GraphController::rewireIfOutputsMoved (const std::map<String, int>& before)
         rewireConnections();   // one publish; plugins untouched
 }
 
-void GraphController::setOutputLayout (const lighthost::outputs::Layout& layout)
+bool GraphController::setOutputLayout (const lighthost::outputs::Layout& layout)
 {
     if (layout == outputLayout)
-        return;
+        return false;
 
     const auto before = outputBases();
     outputLayout = layout;
     pinTargetNow = lighthost::outputs::pinTarget (layout);
     rewireIfOutputsMoved (before);
+    return true;
 }
 
 bool GraphController::pinLegacyOutputs (const lighthost::outputs::PinTarget& target)

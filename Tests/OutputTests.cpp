@@ -65,6 +65,17 @@ int runOutputTests (int& checks)
         check (checks, pin.has_value() && pin->outCh == 2 && pin->label == "Loop-back 1/2" && pin->device == "EVO",
                "pin target: first active pair, its label, the device");
         check (checks, ! op::pinTarget (layoutOf ("EVO", "0")).has_value(), "pin target: no active output -> none");
+
+        // Only a COMPLETE pair is pinned (masks in JUCE string order: the rightmost digit is channel 1).
+        const auto pinOf = [] (const char* bits) { return op::pinTarget (layoutOf ("EVO", bits)); };
+        check (checks, ! pinOf ("1").has_value(), "pin target: a single active channel is no pair -> not pinned");
+        check (checks, ! pinOf ("0101").has_value(), "pin target: two channels without a neighbour -> not pinned");
+        check (checks, pinOf ("1011").has_value() && pinOf ("1011")->outCh == 0, "pin target: channels 1,2,4 -> the complete pair at 0");
+        check (checks, pinOf ("1101").has_value() && pinOf ("1101")->outCh == 2,
+               "pin target: channel 1 alone, then 3+4 -> skips the incomplete first channel (pair at 2)");
+        check (checks, pinOf ("0110").has_value() && pinOf ("0110")->outCh == 1, "pin target: an odd-aligned complete pair (2,3) pins channel index 1");
+        check (checks, pinOf ("1100").has_value() && pinOf ("1100")->outCh == 2, "pin target: Hung's 1100 -> channel index 2");
+        check (checks, pinOf ("1111").has_value() && pinOf ("1111")->outCh == 0, "pin target: all active -> pair 0");
         check (checks, ! op::pinTarget (op::Layout()).has_value(), "pin target: no device -> none");
 
         // outputBase: strict on the same device, fallback / silence elsewhere.
