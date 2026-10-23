@@ -73,6 +73,59 @@ namespace
         void getStateInformation (MemoryBlock&) override {}
         void setStateInformation (const void*, int) override {}
     };
+
+    // Configurable bus layouts for the forceStereo edge cases: an optional mono side-chain
+    // input (disable-able or required), no input bus at all (instrument-like), and
+    // a plugin that rejects its own initial layout (as Bertom Denoiser does in JUCE's
+    // current-layout check).
+    struct BusProc : juce::AudioProcessor
+    {
+        enum class Side { none, optional, required };
+
+        static BusesProperties make (bool withInput, Side side)
+        {
+            BusesProperties b;
+            if (withInput) b = b.withInput ("In", AudioChannelSet::mono(), true);
+            if (side != Side::none) b = b.withInput ("SC", AudioChannelSet::mono(), true);
+            return b.withOutput ("Out", AudioChannelSet::mono(), true);
+        }
+
+        BusProc (bool withInput, Side s) : juce::AudioProcessor (make (withInput, s)), hasInput (withInput), side (s) {}
+
+        bool hasInput; Side side;
+        mutable int rejected = 0;   // layouts offered that the plugin refused
+
+        bool isBusesLayoutSupported (const BusesLayout& l) const override
+        {
+            const auto out = l.getMainOutputChannelSet();
+            bool ok = (out == AudioChannelSet::stereo() || out == AudioChannelSet::mono());
+            if (hasInput && l.getMainInputChannelSet() != out) ok = false;
+            if (side != Side::none)
+            {
+                const bool scOn = ! l.getChannelSet (true, hasInput ? 1 : 0).isDisabled();
+                if (side == Side::required && ! scOn) ok = false;
+            }
+            if (! ok) ++rejected;
+            return ok;
+        }
+
+        const String getName() const override { return "Bus"; }
+        void prepareToPlay (double, int) override {}
+        void releaseResources() override {}
+        void processBlock (AudioBuffer<float>&, MidiBuffer&) override {}
+        double getTailLengthSeconds() const override { return 0.0; }
+        bool acceptsMidi() const override { return false; }
+        bool producesMidi() const override { return false; }
+        AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        int getNumPrograms() override { return 1; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram (int) override {}
+        const String getProgramName (int) override { return {}; }
+        void changeProgramName (int, const String&) override {}
+        void getStateInformation (MemoryBlock&) override {}
+        void setStateInformation (const void*, int) override {}
+    };
 }
 
 int runMeterTests (int& checks)
@@ -203,6 +256,45 @@ int runMeterTests (int& checks)
         const bool ok2 = lighthost::buses::forceStereo (monoOnly, 44100.0, 64);
         check (checks, ! ok2 && monoOnly.getTotalNumInputChannels() == 1,
                "forceStereo leaves a mono-only plugin untouched");
+
+        // Optional side-chain: disabled, main stereo (candidate A).
+        BusProc optSc (true, BusProc::Side::optional);
+        check (checks, lighthost::buses::forceStereo (optSc, 44100.0, 64)
+                          && optSc.getBus (true, 0)->getCurrentLayout() == AudioChannelSet::stereo()
+                          && optSc.getBus (false, 0)->getCurrentLayout() == AudioChannelSet::stereo()
+                          && ! optSc.getBus (true, 1)->isEnabled(),
+               "forceStereo: optional side-chain is disabled, main buses stereo");
+
+        // Required side-chain: candidate A refused, B keeps it enabled.
+        BusProc reqSc (true, BusProc::Side::required);
+        check (checks, lighthost::buses::forceStereo (reqSc, 44100.0, 64)
+                          && reqSc.getBus (true, 0)->getCurrentLayout() == AudioChannelSet::stereo()
+                          && reqSc.getBus (true, 1)->isEnabled(),
+               "forceStereo: required side-chain stays enabled, main buses stereo");
+
+        // Instrument-like: no input bus at all. Output goes stereo, nothing crashes.
+        BusProc inst (false, BusProc::Side::none);
+        check (checks, inst.getBusCount (true) == 0 && lighthost::buses::forceStereo (inst, 44100.0, 64)
+                          && inst.getBus (false, 0)->getCurrentLayout() == AudioChannelSet::stereo(),
+               "forceStereo: no input bus, mono output promoted to stereo");
+
+        // Rejects its own initial (mono) layout: still ends up stereo.
+        struct PickyProc : BusProc
+        {
+            PickyProc() : BusProc (true, Side::none) {}
+            bool isBusesLayoutSupported (const BusesLayout& l) const override
+            {
+                return l.getMainInputChannelSet() == AudioChannelSet::stereo()
+                    && l.getMainOutputChannelSet() == AudioChannelSet::stereo();
+            }
+        } picky;
+        check (checks, lighthost::buses::forceStereo (picky, 44100.0, 64)
+                          && picky.getTotalNumInputChannels() == 2 && picky.getTotalNumOutputChannels() == 2,
+               "forceStereo: plugin that rejects its own initial layout ends stereo");
+
+        // Already stereo is a no-op.
+        check (checks, lighthost::buses::forceStereo (picky, 44100.0, 64),
+               "forceStereo: already-stereo plugin stays stereo");
     }
 
     // --- 6. MonoInputProcessor sums L+R onto both channels ------------------

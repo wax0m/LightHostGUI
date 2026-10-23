@@ -16,15 +16,44 @@ namespace lighthost::buses
     // stereo pair (ch0 + ch1), and a mono plugin only exposes channel 0, leaving the
     // other side silent downstream.
     //
-    // setPlayConfigDetails(2, 2, …) sets the main buses to the canonical 2-channel
-    // (stereo) set if the plugin's layout supports it, and is a harmless no-op when
-    // the plugin is already stereo. Returns true if the plugin ends up 2-in/2-out
-    // (false for genuinely mono-only processors, which are left untouched).
+    // The layout is built explicitly and applied only if the plugin approves it via
+    // checkBusesLayoutSupported, then set with setBusesLayout. JUCE's coarse
+    // setPlayConfigDetails(2, 2, …) is avoided on purpose: it first validates the
+    // plugin's CURRENT layout, which some plugins reject (Debug assert), and it touches
+    // a main input bus even when the plugin has none.
+    //   A: main buses stereo, every other bus disabled (the old setPlayConfigDetails result);
+    //   B: main buses stereo, other buses as they are (for plugins that need e.g. their
+    //      side-chain enabled).
+    // If neither is supported the plugin is left untouched (genuinely mono-only
+    // processors). Returns true if every main bus the plugin has ends up stereo, and it
+    // has at least one.
     inline bool forceStereo (juce::AudioProcessor& p, double sampleRate, int blockSize)
     {
-        if (p.getTotalNumInputChannels() != 2 || p.getTotalNumOutputChannels() != 2)
-            p.setPlayConfigDetails (2, 2, sampleRate, blockSize);
+        using juce::AudioChannelSet;
 
-        return p.getTotalNumInputChannels() == 2 && p.getTotalNumOutputChannels() == 2;
+        p.setRateAndBufferSizeDetails (sampleRate, blockSize);
+
+        const bool hasIn  = p.getBusCount (true)  > 0;
+        const bool hasOut = p.getBusCount (false) > 0;
+
+        auto wanted = p.getBusesLayout();
+        if (hasIn)  wanted.getChannelSet (true,  0) = AudioChannelSet::stereo();
+        if (hasOut) wanted.getChannelSet (false, 0) = AudioChannelSet::stereo();
+
+        auto disableSide = wanted;
+        for (int i = 1; i < disableSide.inputBuses.size();  ++i) disableSide.inputBuses.getReference (i)  = AudioChannelSet::disabled();
+        for (int i = 1; i < disableSide.outputBuses.size(); ++i) disableSide.outputBuses.getReference (i) = AudioChannelSet::disabled();
+
+        if (p.getBusesLayout() != disableSide)
+        {
+            for (const auto* candidate : { &disableSide, &wanted })
+                if (p.checkBusesLayoutSupported (*candidate) && p.setBusesLayout (*candidate))
+                    break;
+        }
+
+        const auto now = p.getBusesLayout();
+        return (hasIn || hasOut)
+            && (! hasIn  || now.getMainInputChannelSet()  == AudioChannelSet::stereo())
+            && (! hasOut || now.getMainOutputChannelSet() == AudioChannelSet::stereo());
     }
 }
