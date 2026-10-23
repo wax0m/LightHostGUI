@@ -27,6 +27,8 @@
 //    S. an unreadable saved graph is backed up and reported, never silently overwritten.
 //    T. replacing a plugin in place keeps wiring and strip, imports a VST2 state, publishes once.
 //    U. instrument nodes: a 0-input synth is a source beside the chain, wired to OUT, MIDI on (fake processors; a real VST3 instrument when found).
+//    V. two OUTs on the real graph (a real effect fans out to a main and an extra pair).
+//    W. output nodes bound to device channel pairs: strict bindings, inactive pairs, legacy pinning, other device (fake processors).
 //
 //  Used by both the LightHostRuntimeTests console target and the shipping app's
 //  `-run-selftest` command-line switch, so CI can verify the real binary.

@@ -92,12 +92,16 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
         knownPluginList.recreateFromXml (*savedPluginList);
     pluginSortMethod = KnownPluginList::sortByManufacturer;
     knownPluginList.addChangeListener (this);
+    // The device's output layout first, so the graph is built on the right pair straight away.
+    controller.setOutputLayout (currentOutputLayout());
+    deviceManager.addChangeListener (this);
     // Signal graph (migrates legacy chain settings on first run)
     controller.loadFrom (*getAppProperties().getUserSettings());
     // Mono-input preference (app-global; sums a mono source to both channels).
     controller.setMonoInput (getAppProperties().getUserSettings()->getBoolValue ("monoInput", false));
     // Presets: load the store, or seed a "Default" from the just-loaded graph.
     loadPresets();
+    pinLegacyOutputs (controller.didPinOnLoad());   // stored presets (and the saved graph, if loadFrom stamped it)
 
     // A v1.0 build would read a v2 graph as px values clamped to 1 (every node bottom-right), so keep the
     // v1 file once, before the first save can rewrite it. No dialog: the migration itself is lossless.
@@ -137,6 +141,7 @@ void IconMenu::shutdownCleanly()
 
     // Stop the device before the graph and plugin instances are destroyed.
     deviceManager.removeMidiInputDeviceCallback ({}, &player);
+    deviceManager.removeChangeListener (this);
     deviceManager.removeAudioCallback (&player);
     player.setProcessor (nullptr);
     deviceManager.closeAudioDevice();
@@ -317,8 +322,49 @@ void IconMenu::setIcon()
     #endif
 }
 
+lighthost::outputs::Layout IconMenu::currentOutputLayout() const
+{
+    lighthost::outputs::Layout layout;
+    if (auto* device = deviceManager.getCurrentAudioDevice())
+    {
+        layout.known      = true;
+        layout.deviceName = device->getName();
+        layout.names      = device->getOutputChannelNames();
+        layout.activeMask = device->getActiveOutputChannels();
+    }
+    return layout;
+}
+
+void IconMenu::applyDeviceLayout()
+{
+    if (isShutDown)
+        return;
+    controller.setOutputLayout (currentOutputLayout());   // one rewire, only if some OUT's pair moved
+    pinLegacyOutputs (false);
+    if (mainWindow != nullptr)
+        mainWindow->refreshChain();   // OUT cards show active / inactive
+}
+
+void IconMenu::pinLegacyOutputs (bool alsoSave)
+{
+    bool changed = alsoSave;
+    if (const auto target = lighthost::outputs::pinTarget (controller.getOutputLayout()))
+    {
+        changed = controller.pinLegacyOutputs (*target) || changed;
+        changed = store.pinLegacyOutputs (target->outCh, target->label, target->device) || changed;
+    }
+    if (changed)
+    {
+        persistPresets();
+        controller.save (*getAppProperties().getUserSettings());
+    }
+}
+
 void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
 {
+    if (changed == &deviceManager)
+        return applyDeviceLayout();
+
     if (changed == &knownPluginList)
     {
         auto savedPluginList = knownPluginList.createXml();

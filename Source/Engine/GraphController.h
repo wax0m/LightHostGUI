@@ -18,6 +18,7 @@
 #include "MeterProcessor.h"
 #include "NodeStripProcessor.h"
 #include "PluginParameters.h"
+#include "OutputPairs.h"
 #include "PassThroughProcessor.h"
 #include "PluginBuses.h"
 #include "MonoInputProcessor.h"
@@ -43,6 +44,7 @@ public:
     // Non-empty when the last loadFrom() found an unreadable saved graph: a copy was kept
     // (see SettingsBackup.h) and the controller started from defaults.
     String getLoadWarning() const { return loadWarning; }
+    bool didPinOnLoad() const noexcept { return pinnedOnLoad; }   // loadFrom() bound the saved graph's unbound OUTs to the open device
     bool didMigrateOnLoad() const noexcept { return migratedOnLoad; }   // loadFrom() read a v1 (normalised) graph
 
     //==============================================================================
@@ -104,7 +106,24 @@ public:
     // rebuild, or if the corresponding IO node is absent. Meters are spliced into
     // the live graph only — they are never stored in the GraphDocument.
     const MeterTap* getInputMeter()  const noexcept;
-    const MeterTap* getOutputMeter() const noexcept;
+    const MeterTap* getOutputMeter() const noexcept;                       // the main OUT
+    const MeterTap* getOutputMeter (const String& outUid) const noexcept;  // any OUT that currently has one
+
+    //==============================================================================
+    // Output nodes bound to device channel pairs (v1.2 B). The device tells the controller which output
+    // channels are active (names too); each audioOut node feeds the pair its binding names, resolved at
+    // rewire time (never per block). A binding belongs to the device it was made on: on another device
+    // the main OUT falls back to the first active pair and extra OUTs stay silent (see OutputPairs.h).
+    // A layout change that moves some OUT rewires once (one publish); no plugin is reloaded.
+    void setOutputLayout (const lighthost::outputs::Layout&);
+    const lighthost::outputs::Layout& getOutputLayout() const noexcept { return outputLayout; }
+    // Stamp OUT nodes without a binding with the target (document only; the wiring doesn't change for the main OUT).
+    bool pinLegacyOutputs (const lighthost::outputs::PinTarget&);
+    String addOutput (int outCh);                       // a new extra OUT bound to the pair; "" without a device
+    void   setOutputBinding (const String& outUid, int outCh);   // rebind (one rewire)
+    int    getOutputBase (const String& outUid) const;  // graph output channel its pair lands on, -1 = inactive (silent)
+    bool   isOutputActive (const String& outUid) const { return getOutputBase (outUid) >= 0; }
+    String getOutputDisplayLabel (const String& outUid) const;
 
     //==============================================================================
     // Per-node channel strip (M4): output gain + stereo balance, plus the node's
@@ -217,11 +236,11 @@ private:
 
     // Meter plumbing (runtime only).
     void insertMasterMeters();
-    MeterProcessor* spliceMeterBefore (AudioProcessorGraph::NodeID target);
+    MeterProcessor* spliceMeterBefore (AudioProcessorGraph::NodeID target, int targetBaseChannel = 0);
     OutputGuardProcessor* spliceGuardBefore (AudioProcessorGraph::NodeID target);
     // Shared body: redirect every X -> target connection through a new Proc node.
     template <typename Proc>
-    AudioProcessorGraph::Node* spliceProcBefore (AudioProcessorGraph::NodeID target);
+    AudioProcessorGraph::Node* spliceProcBefore (AudioProcessorGraph::NodeID target, int targetBaseChannel = 0);
     MeterProcessor* spliceMeterAfter  (AudioProcessorGraph::NodeID source);
 
     void insertNodeStrips();
@@ -239,6 +258,13 @@ private:
     AudioProcessorGraph& graph;
     AudioPluginFormatManager& formatManager;
     std::map<String, AudioProcessorGraph::NodeID> uidToNodeId;
+    lighthost::outputs::Layout outputLayout;
+    std::optional<lighthost::outputs::PinTarget> pinTargetNow;   // first active pair of the open device
+    std::map<String, MeterProcessor*> outputMeters;              // per OUT that has a guard + meter in front of it
+    std::map<String, int> outputBases() const;
+    void rewireIfOutputsMoved (const std::map<String, int>& before);
+    void registerIoNode (const ValueTree& nodeTree);             // an audioIn/audioOut document node -> live IO node
+    bool pinnedOnLoad = false;
     std::set<String> missingPlugins;   // plugin nodes running as pass-through (failed to load)
     MeterProcessor* inputMeter  = nullptr;   // owned by the graph node, not us
     MeterProcessor* outputMeter = nullptr;

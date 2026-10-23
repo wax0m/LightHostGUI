@@ -38,6 +38,8 @@ public:
     void setPresetDocument (int index, const GraphDocument&);         // overwrite (== "save")
     GraphDocument getPresetDocument (int index) const;               // load (default doc if OOR)
     void removePreset (int index);
+    // Stamp the unbound OUT nodes of EVERY stored preset (see GraphDocument::pinLegacyOutputs).
+    bool pinLegacyOutputs (int outCh, const juce::String& label, const juce::String& device);
 
     bool migratedOnLoad = false;   // set by fromXml when any preset's graph was a v1 tree
 

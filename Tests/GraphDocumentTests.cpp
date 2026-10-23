@@ -20,6 +20,7 @@ int runPresetTests (int& checks);  // Tests/PresetTests.cpp
 int runMixTests (int& checks);     // Tests/MixTests.cpp
 int runSettingsTests (int& checks);// Tests/SettingsTests.cpp
 int runVst2StateTests (int& checks);// Tests/Vst2StateTests.cpp
+int runOutputTests (int& checks);  // Tests/OutputTests.cpp
 
 static int failures = 0;
 static int checks   = 0;
@@ -320,6 +321,7 @@ int main()
     failures += runMixTests (checks);
     failures += runSettingsTests (checks);
     failures += runVst2StateTests (checks);
+    failures += runOutputTests (checks);
 
     std::cout << (failures == 0 ? "PASS " : "FAIL ")
               << (checks - failures) << '/' << checks << " checks\n";

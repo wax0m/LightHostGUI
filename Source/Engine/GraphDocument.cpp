@@ -22,6 +22,10 @@ namespace
     const Identifier idBypassed    ("bypassed");
     const Identifier idState       ("state");
     const Identifier idPrevState   ("prevState");
+    const Identifier idOutCh       ("outCh");
+    const Identifier idOutLabel    ("outLabel");
+    const Identifier idOutDevice   ("outDevice");
+    const Identifier idMain        ("main");
     const Identifier idGain        ("gain");
     const Identifier idPan         ("pan");
     const Identifier idMidi        ("midi");
@@ -44,7 +48,8 @@ GraphDocument::GraphDocument()
     state.appendChild (ValueTree (idConnections), nullptr);
 
     addNodeInternal (typeAudioIn,  "Audio Input",  lighthost::geometry::defaultInX,  lighthost::geometry::defaultY);
-    addNodeInternal (typeAudioOut, "Audio Output", lighthost::geometry::defaultOutX, lighthost::geometry::defaultY);
+    const String outUid = addNodeInternal (typeAudioOut, "Audio Output", lighthost::geometry::defaultOutX, lighthost::geometry::defaultY);
+    getNodeByUid (outUid).setProperty (idMain, true, nullptr);
 }
 
 GraphDocument GraphDocument::fromXml (const String& xml)
@@ -122,9 +127,97 @@ ValueTree GraphDocument::getConnections() const  { return state.getChildWithName
 
 String GraphDocument::getIoNodeUid (bool input) const
 {
-    ValueTree node = state.getChildWithName (idNodes)
-                          .getChildWithProperty (idType, input ? typeAudioIn : typeAudioOut);
-    return node.getProperty (idUid).toString();
+    ValueTree nodes = state.getChildWithName (idNodes);
+    if (! input)
+    {
+        String first;
+        for (int i = 0; i < nodes.getNumChildren(); ++i)
+        {
+            ValueTree n = nodes.getChild (i);
+            if (n.getProperty (idType).toString() != typeAudioOut)
+                continue;
+            if ((bool) n.getProperty (idMain, false))
+                return n.getProperty (idUid).toString();
+            if (first.isEmpty())
+                first = n.getProperty (idUid).toString();
+        }
+        return first;   // documents from before v1.2 have no main flag: the first OUT is the main one
+    }
+
+    return nodes.getChildWithProperty (idType, typeAudioIn).getProperty (idUid).toString();
+}
+
+String GraphDocument::addOutputNode (int outCh, const String& label, const String& device, float x, float y)
+{
+    const String uid = addNodeInternal (typeAudioOut, "Audio Output", x, y);
+    setOutputBinding (uid, outCh, label, device);
+    return uid;
+}
+
+std::vector<String> GraphDocument::getOutputUids() const
+{
+    std::vector<String> out;
+    ValueTree nodes = state.getChildWithName (idNodes);
+    for (int i = 0; i < nodes.getNumChildren(); ++i)
+        if (nodes.getChild (i).getProperty (idType).toString() == typeAudioOut)
+            out.push_back (nodes.getChild (i).getProperty (idUid).toString());
+    return out;
+}
+
+bool GraphDocument::isMainOutput (const String& uid) const
+{
+    return uid.isNotEmpty() && uid == getIoNodeUid (false);
+}
+
+void GraphDocument::setOutputBinding (const String& uid, int outCh, const String& label, const String& device)
+{
+    ValueTree n = getNodeByUid (uid);
+    if (! n.isValid() || n.getProperty (idType).toString() != typeAudioOut)
+        return;
+    n.setProperty (idOutCh, jmax (0, outCh), nullptr);
+    n.setProperty (idOutLabel, label, nullptr);
+    n.setProperty (idOutDevice, device, nullptr);
+}
+
+int GraphDocument::getOutputChannel (const String& uid) const
+{
+    ValueTree n = getNodeByUid (uid);
+    return n.hasProperty (idOutCh) ? jmax (0, (int) n.getProperty (idOutCh)) : -1;
+}
+
+String GraphDocument::getOutputLabel (const String& uid) const  { return getNodeByUid (uid).getProperty (idOutLabel).toString(); }
+String GraphDocument::getOutputDevice (const String& uid) const { return getNodeByUid (uid).getProperty (idOutDevice).toString(); }
+
+bool GraphDocument::pinLegacyOutputs (ValueTree& graph, int outCh, const String& label, const String& device)
+{
+    ValueTree nodes = graph.getChildWithName (idNodes);
+    bool changed = false, hasMain = false;
+    ValueTree firstOut;
+
+    for (int i = 0; i < nodes.getNumChildren(); ++i)
+    {
+        ValueTree n = nodes.getChild (i);
+        if (n.getProperty (idType).toString() != typeAudioOut)
+            continue;
+        if (! firstOut.isValid())
+            firstOut = n;
+        hasMain = hasMain || (bool) n.getProperty (idMain, false);
+
+        if (! n.hasProperty (idOutCh))
+        {
+            n.setProperty (idOutCh, jmax (0, outCh), nullptr);
+            n.setProperty (idOutLabel, label, nullptr);
+            n.setProperty (idOutDevice, device, nullptr);
+            changed = true;
+        }
+    }
+
+    if (! hasMain && firstOut.isValid())
+    {
+        firstOut.setProperty (idMain, true, nullptr);
+        changed = true;
+    }
+    return changed;
 }
 
 void GraphDocument::setBypassed (const String& uid, bool b)

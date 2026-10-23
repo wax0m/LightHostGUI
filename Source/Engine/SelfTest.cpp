@@ -210,11 +210,12 @@ namespace
     // is deleted on destruction. Declaration order = construction order.
     struct GraphFixture
     {
-        GraphFixture (AudioPluginFormatManager& fm, const String& name, double sr = 44100.0, int blockSize = 512)
+        GraphFixture (AudioPluginFormatManager& fm, const String& name, double sr = 44100.0, int blockSize = 512,
+                      int numOutputs = 2)
             : file (tempSettingsFile (name))
         {
             file.deleteFile();
-            graph.setPlayConfigDetails (2, 2, sr, blockSize);
+            graph.setPlayConfigDetails (2, numOutputs, sr, blockSize);
             graph.prepareToPlay (sr, blockSize);
             settings   = makeSettings (file);
             controller = std::make_unique<GraphController> (graph, fm);
@@ -481,6 +482,15 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         std::cout << "  baseline IN->2 plugins->OUT: nodes " << nodes << ", connections " << conns << std::endl;
         r.expect (emptyNodes == 5 && emptyConns == 8, "baseline: empty graph counts");
         r.expect (nodes == 9 && conns == 16, "baseline: two-plugin serial graph counts");
+
+        // The same graph with the OUT pinned to the first active pair of an open device is the same render sequence.
+        lighthost::outputs::Layout layout;
+        layout.known = true; layout.deviceName = "BaselineDevice"; layout.activeMask.parseString ("1100", 2);
+        layout.names = StringArray { "Out 1", "Out 2", "Loop-back 1", "Loop-back 2" };
+        controller.setOutputLayout (layout);
+        controller.pinLegacyOutputs (*lighthost::outputs::pinTarget (layout));
+        r.expect (graph.getNumNodes() == 9 && (int) graph.getConnections().size() == 16,
+                  "baseline: a pinned OUT keeps the exact node and connection counts");
     }
 
     //==========================================================================
@@ -598,6 +608,219 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         midi.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 0);
         fx.graph.processBlock (block, midi);
         r.expect (peakOf (block, 0) < 1.0e-6f && peakOf (block, 1) < 1.0e-6f, "a missing instrument is silent");
+    }
+
+    //==========================================================================
+    // Test W (fake processors) — output nodes bound to device channel pairs. A 4-channel graph: source A on the
+    //          main OUT (pair 0/1), source B on an extra OUT bound to pair 2/3 — each pair carries only its own
+    //          source; one source on both OUTs shows on both; an inactive pair is silent and unwired; the guard
+    //          limits every pair; add / rebind / layout change publish once. Legacy scenario (Hung's setup):
+    //          the original OUT on the first active pair of a 2-channel device is pinned to channel index 2,
+    //          the wiring doesn't change, and enabling Out 1/2 afterwards leaves it on Loop-back. A binding
+    //          belongs to its device: on another device the main OUT plays on the first active pair, the
+    //          extra OUT is silent.
+    //==========================================================================
+    std::cout << "\n[W] output nodes bound to device channel pairs" << std::endl;
+    {
+        using lighthost::outputs::Layout;
+        const auto layoutOf = [] (const String& device, const char* bits)
+        {
+            Layout l;
+            l.known = true;
+            l.deviceName = device;
+            l.activeMask.parseString (bits, 2);
+            l.names = StringArray { "Out 1", "Out 2", "Loop-back 1", "Loop-back 2" };
+            return l;
+        };
+        const auto factory = [] (const PluginDescription& d) -> std::unique_ptr<AudioProcessor>
+        {
+            if (d.name == "SynthA")     return std::make_unique<FakeInstrument> (true, 0.5f);
+            if (d.name == "SynthB")     return std::make_unique<FakeInstrument> (true, 0.25f);
+            if (d.name == "LoudSynth")  return std::make_unique<FakeInstrument> (true, 2.0f);
+            return nullptr;
+        };
+        const auto renderN = [] (AudioProcessorGraph& graph, int channels, AudioBuffer<float>& block)
+        {
+            block.setSize (channels, 512, false, true, true);
+            block.clear();
+            MidiBuffer midi;
+            midi.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 0);
+            graph.processBlock (block, midi);
+        };
+        const auto near = [] (float a, float b, float tol = 0.02f) { return std::abs (a - b) <= tol; };
+        const auto level = [] (const AudioBuffer<float>& b, int ch) { return b.getMagnitude (ch, 0, b.getNumSamples()); };
+
+        // --- strict bindings on a 4-channel graph ------------------------------------------
+        {
+            GraphFixture fx (formatManager, "outputs4", 44100.0, 512, 4);
+            GraphController& controller = *fx.controller;
+            AudioProcessorGraph& graph = fx.graph;
+            controller.instanceFactory = factory;
+            const String mainUid = controller.document.getIoNodeUid (false);
+
+            int before = controller.getPublishCount();
+            controller.setOutputLayout (layoutOf ("EVO", "1111"));
+            r.expect (controller.getPublishCount() == before, "a layout that doesn't move any OUT publishes nothing");
+            r.expect (controller.getOutputBase (mainUid) == 0, "the unbound main OUT plays on the first active pair");
+
+            const String a = controller.addPlugin (fakeDescription ("SynthA", true));
+            const String b = controller.addPlugin (fakeDescription ("SynthB", true));
+            r.expect (a.isNotEmpty() && b.isNotEmpty(), "two sources added");
+
+            const int nodesBefore = graph.getNumNodes(), connsBefore = (int) graph.getConnections().size();
+            before = controller.getPublishCount();
+            const String out2 = controller.addOutput (2);
+            r.expect (out2.isNotEmpty() && controller.getPublishCount() - before == 1, "adding an OUT publishes exactly once");
+            r.expect (controller.getOutputDisplayLabel (out2) == "Loop-back 1/2", "the new OUT is labelled with its pair");
+            r.expect (graph.getNumNodes() - nodesBefore == 1 && (int) graph.getConnections().size() == connsBefore,
+                      "an OUT nothing feeds costs only its IO node (no guard, no meter, no edges)");
+            r.expect (controller.getOutputMeter (out2) == nullptr && controller.getOutputMeter() != nullptr, "only the fed OUT has a meter");
+
+            controller.disconnectPair (b, mainUid);
+            controller.connectPair (b, out2);
+            r.expect (controller.getOutputMeter (out2) != nullptr, "feeding the OUT gives it its guard and meter");
+
+            AudioBuffer<float> block;
+            renderN (graph, 4, block);
+            r.expect (near (level (block, 0), 0.5f) && near (level (block, 1), 0.5f), "pair 0/1 carries source A only");
+            r.expect (near (level (block, 2), 0.25f) && near (level (block, 3), 0.25f), "pair 2/3 carries source B only");
+
+            // One source on both OUTs.
+            controller.disconnectPair (b, out2);
+            controller.connectPair (a, out2);
+            renderN (graph, 4, block);
+            r.expect (near (level (block, 0), 0.5f) && near (level (block, 2), 0.5f) && near (level (block, 3), 0.5f),
+                      "one source wired to both OUTs appears on both pairs");
+
+            // An inactive pair is silent and unwired; the other pair is untouched.
+            before = controller.getPublishCount();
+            controller.setOutputLayout (layoutOf ("EVO", "0011"));
+            r.expect (controller.getPublishCount() - before == 1, "a layout change that silences an OUT publishes exactly once");
+            r.expect (! controller.isOutputActive (out2) && controller.isOutputActive (mainUid), "the OUT on the inactive pair reports inactive");
+            renderN (graph, 4, block);
+            r.expect (near (level (block, 0), 0.5f) && level (block, 2) < 1.0e-6f && level (block, 3) < 1.0e-6f,
+                      "an inactive pair is silent, the active one unaffected");
+            before = controller.getPublishCount();
+            controller.setOutputLayout (layoutOf ("EVO", "0011"));
+            r.expect (controller.getPublishCount() == before, "the same layout again publishes nothing");
+            controller.setOutputLayout (layoutOf ("EVO", "1111"));
+            renderN (graph, 4, block);
+            r.expect (near (level (block, 2), 0.5f), "the pair comes back when it is active again");
+
+            // Rebind: out2 onto pair 0/1 sums with the main OUT; back to 2/3.
+            before = controller.getPublishCount();
+            controller.setOutputBinding (out2, 0);
+            r.expect (controller.getPublishCount() - before == 1 && controller.getOutputDisplayLabel (out2) == "Out 1/2",
+                      "rebinding publishes exactly once and updates the label");
+            renderN (graph, 4, block);
+            r.expect (level (block, 0) > 0.9f && level (block, 2) < 1.0e-6f, "after the rebind both OUTs sum on pair 0/1 and pair 2/3 is silent");
+            controller.setOutputBinding (out2, 2);
+            before = controller.getPublishCount();
+            controller.setOutputBinding (out2, 2);
+            r.expect (controller.getPublishCount() == before, "rebinding to the same pair is a no-op");
+
+            // The guard limits every pair.
+            const String loud = controller.addPlugin (fakeDescription ("LoudSynth", true));
+            controller.connectPair (loud, out2);
+            renderN (graph, 4, block);
+            const float ceiling = OutputGuardProcessor::getCeiling();
+            bool allLimited = true;
+            for (int ch = 0; ch < 4; ++ch)
+                allLimited = allLimited && level (block, ch) <= ceiling + 0.01f && level (block, ch) > 0.5f;
+            r.expect (allLimited, "the output guard limits both pairs");
+
+            // Main and IN are permanent; an extra OUT can go.
+            const int outsBefore = (int) controller.document.getOutputUids().size();
+            controller.removeNode (mainUid);
+            controller.removeNode (controller.document.getIoNodeUid (true));
+            r.expect ((int) controller.document.getOutputUids().size() == outsBefore && controller.getNodeForUid (mainUid) != nullptr,
+                      "the main OUT and IN can't be removed");
+            before = controller.getPublishCount();
+            controller.removeNode (out2);
+            r.expect (controller.getPublishCount() - before == 1 && (int) controller.document.getOutputUids().size() == outsBefore - 1
+                      && controller.getNodeForUid (out2) == nullptr, "an extra OUT is removed with one publish");
+            renderN (graph, 4, block);
+            r.expect (level (block, 0) > 0.5f && level (block, 2) < 1.0e-6f, "after removing it only the main pair plays");
+        }
+
+        // --- Hung's legacy setup: the original OUT on Loop-back, then Out 1/2 gets enabled ---
+        {
+            GraphFixture fx (formatManager, "outputslegacy", 44100.0, 512, 2);
+            GraphController& controller = *fx.controller;
+            AudioProcessorGraph& graph = fx.graph;
+            controller.instanceFactory = factory;
+            const String mainUid = controller.document.getIoNodeUid (false);
+
+            const auto evo2 = layoutOf ("EVO", "1100");   // only the Loop-back pair is active
+            controller.setOutputLayout (evo2);
+            const String a = controller.addPlugin (fakeDescription ("SynthA", true));
+            AudioBuffer<float> block;
+            renderN (graph, 2, block);
+            r.expect (near (level (block, 0), 0.5f) && near (level (block, 1), 0.5f), "legacy: the unbound OUT plays on the first active pair");
+
+            const int nodes0 = graph.getNumNodes(), conns0 = (int) graph.getConnections().size();
+            const int before = controller.getPublishCount();
+            const auto pin = lighthost::outputs::pinTarget (evo2);
+            r.expect (pin.has_value() && controller.pinLegacyOutputs (*pin), "pinning the legacy OUT reports a change");
+            r.expect (controller.document.getOutputChannel (mainUid) == 2 && controller.document.getOutputLabel (mainUid) == "Loop-back 1/2"
+                      && controller.document.getOutputDevice (mainUid) == "EVO", "legacy: the main OUT is pinned to channel index 2 / Loop-back 1/2 / EVO");
+            r.expect (controller.getPublishCount() == before, "pinning rewires nothing (same pair, same wiring)");
+            r.expect (graph.getNumNodes() == nodes0 && (int) graph.getConnections().size() == conns0,
+                      "the render sequence has the same node and connection count after pinning");
+            r.expect (! controller.pinLegacyOutputs (*pin), "pinning twice changes nothing");
+            renderN (graph, 2, block);
+            r.expect (near (level (block, 0), 0.5f), "legacy: still audible on the same pair after pinning");
+
+            // Hung enables Out 1/2: the device now has 4 active outputs.
+            graph.setPlayConfigDetails (2, 4, 44100.0, 512);
+            graph.prepareToPlay (44100.0, 512);
+            const int beforeEnable = controller.getPublishCount();
+            controller.setOutputLayout (layoutOf ("EVO", "1111"));
+            r.expect (controller.getPublishCount() - beforeEnable == 1, "enabling Out 1/2 rewires once");
+            r.expect (controller.getOutputBase (mainUid) == 2, "the pinned OUT now lands on graph channel 2");
+            renderN (graph, 4, block);
+            r.expect (level (block, 0) < 1.0e-6f && level (block, 1) < 1.0e-6f, "legacy: nothing moved onto Out 1/2");
+            r.expect (near (level (block, 2), 0.5f) && near (level (block, 3), 0.5f), "legacy: the feed stays on Loop-back (device channels 3/4)");
+
+            // A monitor OUT on Out 1/2 next to it.
+            const String monitor = controller.addOutput (0);
+            controller.connectPair (a, monitor);
+            renderN (graph, 4, block);
+            r.expect (near (level (block, 0), 0.5f) && near (level (block, 2), 0.5f), "the monitor OUT plays on Out 1/2, Loop-back is unchanged");
+
+            // Another device: bindings made on EVO don't apply.
+            controller.setOutputLayout (layoutOf ("Other interface", "1111"));
+            renderN (graph, 4, block);
+            r.expect (controller.getOutputBase (mainUid) == 0 && ! controller.isOutputActive (monitor),
+                      "other device: the main OUT falls back to the first active pair, the extra OUT is inactive");
+            r.expect (near (level (block, 0), 0.5f) && level (block, 2) < 1.0e-6f && level (block, 3) < 1.0e-6f,
+                      "other device: the main OUT plays on pair 0/1, the extra OUT is silent");
+            r.expect (controller.document.getOutputChannel (mainUid) == 2 && controller.document.getOutputDevice (monitor) == "EVO",
+                      "other device: the stored bindings are not rewritten");
+
+            // Back on the original device the strict bindings return.
+            controller.setOutputLayout (layoutOf ("EVO", "1111"));
+            renderN (graph, 4, block);
+            r.expect (near (level (block, 0), 0.5f) && near (level (block, 2), 0.5f), "back on EVO both bindings apply again");
+
+            // Pinning on the other device never overwrites the EVO binding.
+            r.expect (! controller.pinLegacyOutputs (*lighthost::outputs::pinTarget (layoutOf ("Other interface", "1111"))),
+                      "pinning on another device doesn't touch bound OUTs");
+        }
+
+        // --- no device yet: a pinned main OUT still plays (first pair), nothing crashes ----------
+        {
+            GraphFixture fx (formatManager, "outputsnodevice", 44100.0, 512, 2);
+            GraphController& controller = *fx.controller;
+            controller.instanceFactory = factory;
+            const String mainUid = controller.document.getIoNodeUid (false);
+            controller.document.setOutputBinding (mainUid, 2, "Loop-back 1/2", "EVO");
+            controller.addPlugin (fakeDescription ("SynthA", true));
+            AudioBuffer<float> block;
+            renderN (fx.graph, 2, block);
+            r.expect (near (level (block, 0), 0.5f), "no device known: the main OUT plays on the first pair");
+            r.expect (controller.addOutput (0).isEmpty(), "no device known: an OUT can't be added");
+        }
     }
 
     const Array<PluginDescription> plugins = discoverPlugins (formatManager, explicitPluginPaths, 2);
@@ -2037,6 +2260,55 @@ int runSelfTest (const StringArray& explicitPluginPaths)
                       "prevState holds the fallback state");
         }
 
+        controller.save (*fx.settings);
+    }
+
+    //==========================================================================
+    // Test V (real plugin) — the two-OUT render on the real graph: a real effect (bypassed, so the result is
+    //          deterministic) fed by the graph input drives the main OUT and an extra OUT on pair 2/3; both
+    //          pairs carry the same signal and the input keeps flowing to the main pair when the layout
+    //          changes underneath.
+    //==========================================================================
+    std::cout << "\n[V] two OUTs on the real graph" << std::endl;
+    {
+        GraphFixture fx (formatManager, "realoutputs", 44100.0, 512, 4);
+        GraphController& controller = *fx.controller;
+        lighthost::outputs::Layout layout;
+        layout.known = true; layout.deviceName = "TestDevice"; layout.activeMask.parseString ("1111", 2);
+        layout.names = StringArray { "Out 1", "Out 2", "Loop-back 1", "Loop-back 2" };
+        controller.setOutputLayout (layout);
+
+        const String uid = controller.appendToChain (pA);
+        r.expect (uid.isNotEmpty(), "real effect added");
+        controller.setBypassed (uid, true);
+        const String out2 = controller.addOutput (2);
+        controller.connectPair (uid, out2);
+
+        AudioBuffer<float> block (4, 512);
+        Random rng (0x0b0b);
+        float peak[4] = {};
+        for (int b = 0; b < 16; ++b)
+        {
+            block.clear();
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < 512; ++i)
+                    block.setSample (ch, i, 0.25f * (rng.nextFloat() * 2.0f - 1.0f));
+            MidiBuffer midi;
+            fx.graph.processBlock (block, midi);
+            for (int ch = 0; ch < 4; ++ch)
+                peak[ch] = jmax (peak[ch], block.getMagnitude (ch, 0, 512));
+        }
+        r.expect (peak[0] > 0.05f && peak[1] > 0.05f, "the main pair carries the input through the real effect");
+        r.expect (peak[2] > 0.05f && peak[3] > 0.05f, "the extra pair carries the same signal");
+        r.expect (std::abs (peak[0] - peak[2]) < 0.02f, "both pairs carry the same level");
+
+        controller.setOutputLayout ([&layout]() { auto l = layout; l.activeMask.parseString ("0011", 2); return l; }());
+        block.clear();
+        for (int i = 0; i < 512; ++i) { block.setSample (0, i, 0.25f); block.setSample (1, i, 0.25f); }
+        MidiBuffer midi;
+        fx.graph.processBlock (block, midi);
+        r.expect (block.getMagnitude (2, 0, 512) < 1.0e-6f && block.getMagnitude (0, 0, 512) > 0.05f,
+                  "with pair 2/3 inactive the extra OUT is silent and the main pair keeps playing");
         controller.save (*fx.settings);
     }
 

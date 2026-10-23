@@ -45,6 +45,12 @@ private:
     // Presets (scenes). The store is persisted alongside settings under "presets";
     // the active preset mirrors the live controller document.
     void loadPresets();
+    // Output pairs (v1.2 B): the open device's active output channels go to the controller, and the
+    // unbound OUT nodes (live document + every stored preset) are bound to its first active pair, so
+    // enabling more channels later can't move the feed.
+    lighthost::outputs::Layout currentOutputLayout() const;
+    void applyDeviceLayout();                 // device opened / changed
+    void pinLegacyOutputs (bool alsoSave);    // one settings save when something was stamped
     void persistPresets();                 // snapshot active + write settings
     void switchToPreset (int index);
     void addPreset();

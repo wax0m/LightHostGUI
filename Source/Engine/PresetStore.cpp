@@ -106,6 +106,18 @@ GraphDocument PresetStore::getPresetDocument (int index) const
     return doc;
 }
 
+bool PresetStore::pinLegacyOutputs (int outCh, const String& label, const String& device)
+{
+    bool changed = false;
+    for (auto preset : state)
+    {
+        auto graph = preset.getChildWithName (idGraph);
+        if (graph.isValid() && GraphDocument::pinLegacyOutputs (graph, outCh, label, device))
+            changed = true;
+    }
+    return changed;
+}
+
 void PresetStore::removePreset (int index)
 {
     if (index < 0 || index >= getNumPresets())

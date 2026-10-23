@@ -157,6 +157,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/MixTests.cpp
         Tests/SettingsTests.cpp
         Tests/Vst2StateTests.cpp
+        Tests/OutputTests.cpp
         Source/Engine/GraphDocument.cpp
     )
 
