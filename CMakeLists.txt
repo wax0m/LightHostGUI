@@ -155,6 +155,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/MidiTests.cpp
         Tests/PresetTests.cpp
         Tests/MixTests.cpp
+        Tests/SettingsTests.cpp
         Source/Engine/GraphDocument.cpp
     )
 

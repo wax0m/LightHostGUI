@@ -20,7 +20,7 @@ ApplicationProperties& getAppProperties();
 class IconMenu : public SystemTrayIconComponent, private Timer, public ChangeListener
 {
 public:
-    IconMenu();
+    explicit IconMenu (juce::String startupWarning = {});
     ~IconMenu() override;
     void mouseDown (const MouseEvent&) override;
     static void menuInvocationCallback (int id, IconMenu*);

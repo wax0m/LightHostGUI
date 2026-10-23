@@ -1,6 +1,7 @@
 #include <JuceHeader.h>
 #include "IconMenu.hpp"
 #include "Engine/SelfTest.h"
+#include "Engine/SettingsBackup.h"
 
 #if JUCE_WINDOWS
  #include <windows.h>   // AttachConsole for -run-selftest console output
@@ -39,9 +40,24 @@ public:
         appProperties = std::make_unique<ApplicationProperties>();
         appProperties->setStorageParameters (options);
 
+        // Before IconMenu exists (its constructor writes settings, and PropertiesFile saves on its own timer):
+        // an unreadable settings file must be copied aside before anything can overwrite it.
+        String startupWarning;
+        if (auto* settings = appProperties->getUserSettings())
+        {
+            if (const auto backup = lighthost::backupUnreadableSettingsFile (*settings))
+            {
+                startupWarning = "Your settings file could not be read. ";
+                startupWarning += backup->getFullPathName().isNotEmpty()
+                                    ? "A copy was kept at " + backup->getFullPathName() + ". "
+                                    : String ("It could not be copied either. ");
+                startupWarning += "The app started with defaults.";
+            }
+        }
+
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
-        mainWindow = std::make_unique<IconMenu>();
+        mainWindow = std::make_unique<IconMenu> (startupWarning);
         #if JUCE_MAC
         Process::setDockIconVisible (false);
         #endif

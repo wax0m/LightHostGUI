@@ -68,7 +68,7 @@ private:
     IconMenu& owner;
 };
 
-IconMenu::IconMenu() : INDEX_PRESET (6000000)
+IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
 {
     // Initialization
     addDefaultFormatsToManager (formatManager);   // JUCE 8: replaces AudioPluginFormatManager::addDefaultFormats()
@@ -99,7 +99,7 @@ IconMenu::IconMenu() : INDEX_PRESET (6000000)
     loadPresets();
 
     // One non-modal notice for whatever could not be read (the backups are already written).
-    const auto warning = (controller.getLoadWarning() + "\n\n" + presetsWarning).trim();
+    const auto warning = (startupWarning + "\n\n" + controller.getLoadWarning() + "\n\n" + presetsWarning).trim();
     if (warning.isNotEmpty())
         AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Light Host", warning);
 

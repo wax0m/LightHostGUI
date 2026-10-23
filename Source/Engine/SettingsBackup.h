@@ -7,6 +7,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <optional>
 
 namespace lighthost
 {
@@ -27,5 +28,24 @@ namespace lighthost
             return {};
 
         return backup;
+    }
+
+    // The whole settings file is unreadable (not well-formed XML), so PropertiesFile loaded nothing and the
+    // next save would overwrite it with defaults. Copies the file byte for byte to
+    //   <settings file name>-unreadable-<yyyyMMdd-HHmmss>
+    // nullopt = file absent or readable (nothing to do); File{} = unreadable but the copy failed; else the copy.
+    inline std::optional<juce::File> backupUnreadableSettingsFile (juce::PropertiesFile& settings)
+    {
+        const auto file = settings.getFile();
+        if (! file.existsAsFile() || settings.isValidFile())
+            return std::nullopt;
+
+        const auto stamp = juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S");
+        const auto copy = file.getSiblingFile (file.getFileName() + "-unreadable-" + stamp);
+
+        if (! file.copyFileTo (copy))
+            return juce::File();
+
+        return copy;
     }
 }
