@@ -18,7 +18,7 @@ class MainWindow : public juce::DocumentWindow
 {
 public:
     MainWindow (GraphController& controller, const PresetStore& store, MainComponent::Callbacks callbacks)
-        : juce::DocumentWindow ("Light Host",
+        : juce::DocumentWindow ("LightHost GUI",
                                 LightHostLookAndFeel::appBg(),
                                 juce::DocumentWindow::minimiseButton | juce::DocumentWindow::maximiseButton | juce::DocumentWindow::closeButton)
     {
