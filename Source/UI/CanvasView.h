@@ -32,7 +32,7 @@ namespace lighthost::ui
 // Rounded chain-endpoint terminal (IN / OUT). A first-class draggable node: it
 // carries the document uid of the audioIn/audioOut node and reports body drags the
 // same way NodeCard does so the canvas can persist its position.
-class EndpointNode : public juce::Component
+class EndpointNode : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     explicit EndpointNode (juce::String labelText) : text (std::move (labelText)) {}
@@ -41,12 +41,20 @@ public:
     std::function<void (const juce::String&, juce::Point<int> delta)> onDragMove;
     std::function<void (const juce::String&)> onDragEnd;
 
+    // OUT nodes only: the device pair it feeds ("3/4"), whether that pair is active, an optional level
+    // readout of what reaches the pair, and the pair / remove menu (click on the pair text or right-click).
+    juce::String pairText;
+    bool inactive = false;
+    std::function<const MeterTap*()> getMeter;
+    std::function<void (const juce::String&)> onMenu;
+
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp   (const juce::MouseEvent&) override;
 
 private:
+    juce::Rectangle<int> pairRect() const { return getLocalBounds().withTrimmedTop (getHeight() / 2 + 18).withHeight (30); }
     juce::String text;
     bool nodeDragActive = false;
     juce::Point<int> lastParentPos;
@@ -135,14 +143,15 @@ private:
     void deleteSelectedCable();
     void showCableMenu (const Cable&);
     void showCardMenu (const juce::String& uid);
+    void showOutputMenu (const juce::String& outUid);   // rebind to a device pair / remove an extra OUT
 
     juce::Viewport* findViewport() const { return findParentComponentOfClass<juce::Viewport>(); }
 
     GraphController& controller;
 
     juce::OwnedArray<NodeCard> cards;
-    EndpointNode inNode  { "IN"  };
-    EndpointNode outNode { "OUT" };
+    EndpointNode inNode { "IN" };
+    juce::OwnedArray<EndpointNode> outNodes;   // one per audioOut node, rebuilt with the cards
     std::vector<NodeView> views;
 
     // Wire-drag state.

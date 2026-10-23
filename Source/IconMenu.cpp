@@ -668,12 +668,38 @@ void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)
         m.addSubMenu ("Instruments", synths);
     }
 
+    // Output > the open device's channel pairs (inactive ones marked). Ids are far above the instrument ids.
+    constexpr int outputIdBase = 1000000;
+    const auto layout = controller.getOutputLayout();
+    if (layout.known && layout.names.size() >= 2)
+    {
+        PopupMenu outs;
+        for (int p = 0; p < layout.names.size() / 2; ++p)
+        {
+            const bool active = lighthost::outputs::activeIndex (layout.activeMask, 2 * p) >= 0;
+            outs.addItem (outputIdBase + p, lighthost::outputs::pairLabel (layout.names, 2 * p) + (active ? "" : "  (inactive)"));
+        }
+        m.addSeparator();
+        m.addSubMenu ("Output", outs);
+    }
+
     m.showMenuAsync (PopupMenu::Options()
                         .withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }),
-        [this, effects, instruments] (int r)
+        [this, effects, instruments, outputIdBase] (int r)
         {
             if (r <= 0)
                 return;
+            if (r >= outputIdBase)
+            {
+                const String uid = controller.addOutput (2 * (r - outputIdBase));
+                controller.save (*getAppProperties().getUserSettings());
+                if (mainWindow != nullptr)
+                {
+                    mainWindow->refreshChain();
+                    mainWindow->revealNode (uid);
+                }
+                return;
+            }
             const PluginDescription* picked = nullptr;
             if (r <= instruments.size())
                 picked = &instruments.getReference (r - 1);
