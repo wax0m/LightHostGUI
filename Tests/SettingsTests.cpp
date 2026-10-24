@@ -190,6 +190,10 @@ int runSettingsTests (int& checks)
         }
         check (checks, lighthost::guard::suspendedFromString ("").isEmpty(), "suspended: empty value is an empty list");
 
+        check (checks, lighthost::guard::wantsSafeMode ({}, true) && lighthost::guard::wantsSafeMode (StringArray { "-safe-mode" }, false),
+               "safe mode: Shift or -safe-mode");
+        check (checks, ! lighthost::guard::wantsSafeMode (StringArray { "-multi-instance=x" }, false), "safe mode: off by default");
+
         // loadablePlugins: a suspended file is filtered out, its description stays in the stored list.
         Array<PluginDescription> known;
         PluginDescription a, b;

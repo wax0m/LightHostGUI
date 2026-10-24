@@ -2660,6 +2660,34 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         const auto offered = lighthost::choice::filterLoadable (known, StringArray { "VST3" }, controller.getSuspendedFiles());
         r.expect (offered.size() == 1 && offered[0].name == "GoodFx" && known.size() == 2, "a suspended file is filtered out of the loadable plugins");
         guardFile.deleteFile();
+
+        // Safe mode: nothing is instantiated, states stay in the document, and a save does not touch them.
+        {
+            GraphFixture sfx (formatManager, "safemode");
+            GraphController& sc = *sfx.controller;
+            int calls = 0;
+            sc.instanceFactory = [&calls] (const PluginDescription&) -> std::unique_ptr<AudioProcessor>
+            {
+                ++calls;
+                return std::make_unique<FakeEffect>();
+            };
+            const String normal = sc.addPlugin (fakeDescription ("SafeFx", false));
+            sc.document.getNodeByUid (normal).setProperty ("state", "c3RhdGU=", nullptr);
+            const auto before = sc.document.getNodeByUid (normal).getProperty ("state").toString();
+
+            sc.setSafeMode (true);
+            calls = 0;
+            sc.loadDocument (GraphDocument::fromXml (sc.document.toXml()));
+            r.expect (calls == 0 && sc.isMissing (normal), "safe mode: a rebuild instantiates nothing, the node is a stand-in");
+            const String added = sc.addPlugin (fakeDescription ("SafeFx2", false));
+            r.expect (calls == 0 && added.isNotEmpty() && sc.isMissing (added), "safe mode: an added plugin is a stand-in too");
+            r.expect (! sc.retryMissingPlugin (normal) && sc.getNumMissingPlugins() == 2 && calls == 0, "safe mode: a retry loads nothing");
+            sc.save (*sfx.settings);
+            r.expect (sc.document.getNodeByUid (normal).getProperty ("state").toString() == before, "safe mode: a save keeps the plugin state");
+
+            sc.setSafeMode (false);
+            r.expect (sc.retryMissingPlugins() == 2 && calls == 2, "leaving safe mode: everything loads again");
+        }
     }
 
     //==========================================================================

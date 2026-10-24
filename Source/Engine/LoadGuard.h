@@ -74,6 +74,17 @@ namespace lighthost::guard
         return file.isNotEmpty() && suspended.contains (file, true);
     }
 
+    // Safe mode: hold Shift while LightHost starts, or pass -safe-mode. Every plugin node then loads as a stand-in.
+    inline bool wantsSafeMode (const juce::StringArray& commandLine, bool shiftDown)
+    {
+        return shiftDown || commandLine.contains ("-safe-mode", true);
+    }
+
+    inline juce::String safeModeNotice()
+    {
+        return "Safe mode: plugins are not loaded. Restart normally to load them.";
+    }
+
     inline juce::String loadGuardNotice (const juce::String& name)
     {
         return "LightHost closed while loading " + name + ". It now runs as a stand-in: remove it, or double-click to retry.";

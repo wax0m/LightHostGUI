@@ -297,6 +297,9 @@ AudioProcessorGraph::Node* GraphController::addPluginNodeToGraph (const ValueTre
 // a channel in the stereo chain. Touches nothing but the new instance.
 std::unique_ptr<AudioProcessor> GraphController::createInstanceFrom (const PluginDescription& desc)
 {
+    if (safeMode)
+        return nullptr;   // the one choke point: add, rebuild, retry and replace all end up here
+
     std::unique_ptr<AudioProcessor> created;
     if (loadGuardFile != File())   // kept until the gesture ends: the crash may come later, in setState or publish
         lighthost::guard::writeGuard (loadGuardFile, desc.fileOrIdentifier, desc.name);

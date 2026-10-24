@@ -75,7 +75,10 @@ public:
 
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
-        mainWindow = std::make_unique<IconMenu> (startupWarning);
+        // Shift held at start (or -safe-mode): nothing is instantiated, so a plugin that kills the app can be removed.
+        const bool safeMode = lighthost::guard::wantsSafeMode (getCommandLineParameterArray(),
+                                                               ModifierKeys::getCurrentModifiersRealtime().isShiftDown());
+        mainWindow = std::make_unique<IconMenu> (startupWarning, safeMode);
         #if JUCE_MAC
         Process::setDockIconVisible (false);
         #endif

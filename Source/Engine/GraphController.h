@@ -207,6 +207,11 @@ public:
     bool isSuspendedFile (const String& pluginFile) const { return lighthost::guard::isSuspended (suspendedFiles, pluginFile); }
     std::function<void()> onSuspendedChanged;
 
+    // Safe mode: no plugin is instantiated at all (every plugin node, added, retried or replaced, is a
+    // stand-in); saved states stay in the document. Set before the first load.
+    void setSafeMode (bool on) noexcept { safeMode = on; }
+    bool isSafeMode() const noexcept { return safeMode; }
+
     // Test seam: when set, plugin instances come from here instead of the format manager
     // (a null result is a plugin that can't load). Production code never sets it.
     std::function<std::unique_ptr<AudioProcessor> (const PluginDescription&)> instanceFactory;
@@ -293,6 +298,7 @@ private:
 
     File loadGuardFile;
     StringArray suspendedFiles;
+    bool safeMode = false;
     bool explicitRetry = false;   // true only inside a user-requested retry: suspension is lifted for it
     int guardDepth = 0;           // gestures in progress; the guard file is removed when the outermost ends
     struct GuardScope

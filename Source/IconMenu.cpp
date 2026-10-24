@@ -77,7 +77,7 @@ private:
     IconMenu& owner;
 };
 
-IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
+IconMenu::IconMenu (juce::String startupWarning, bool safeMode) : INDEX_PRESET (6000000)
 {
     // Initialization
     addDefaultFormatsToManager (formatManager);   // JUCE 8: replaces AudioPluginFormatManager::addDefaultFormats()
@@ -104,6 +104,9 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
         knownPluginList.recreateFromXml (*savedPluginList);
     pluginSortMethod = KnownPluginList::sortByManufacturer;
     recoverCrashedPlugins();   // before any scan and before the change listener: saves the blacklist itself
+    controller.setSafeMode (safeMode);
+    if (safeMode)
+        postNotice (lighthost::guard::safeModeNotice());
     recoverLoadGuard();   // a plugin that killed the last start becomes a stand-in before the graph is built
     knownPluginList.addChangeListener (this);
     // The device's output layout first, so the graph is built on the right pair straight away.
