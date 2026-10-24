@@ -691,7 +691,21 @@ void IconMenu::mouseDown (const MouseEvent& e)
     #endif
     Process::makeForegroundProcess();
     menuIconLeftClicked = e.mods.isLeftButtonDown();
+    #if JUCE_WINDOWS
+    // A left click may be the first half of a double click (which opens the window), so the menu waits out the
+    // system double-click time; mouseDoubleClick cancels it. A right click shows the menu at once.
+    startTimer (menuIconLeftClicked ? jmax (50, MouseEvent::getDoubleClickTimeout()) : 50);
+    #else
     startTimer (50);
+    #endif
+}
+
+void IconMenu::mouseDoubleClick (const MouseEvent& e)
+{
+    if (! e.mods.isLeftButtonDown())
+        return;
+    stopTimer();   // drop the menu the first click scheduled
+    showMainWindow();   // opens it if hidden, raises it if open
 }
 
 void IconMenu::menuInvocationCallback (int id, IconMenu* im)

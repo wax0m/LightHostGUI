@@ -23,6 +23,7 @@ public:
     explicit IconMenu (juce::String startupWarning = {}, bool safeMode = false);
     ~IconMenu() override;
     void mouseDown (const MouseEvent&) override;
+    void mouseDoubleClick (const MouseEvent&) override;
     static void menuInvocationCallback (int id, IconMenu*);
     void changeListenerCallback (ChangeBroadcaster* changed) override;
 
