@@ -29,6 +29,7 @@
 //    U. instrument nodes: a 0-input synth is a source beside the chain, wired to OUT, MIDI on (fake processors; a real VST3 instrument when found).
 //    V. two OUTs on the real graph (a real effect fans out to a main and an extra pair).
 //    W. output nodes bound to device channel pairs: strict bindings, inactive pairs, legacy pinning, other device (fake processors).
+//    X. plugin scan in a child process: a good file scans, a worker that dies / hangs blacklists that file only, a hung test load does not.
 //
 //  Used by both the LightHostRuntimeTests console target and the shipping app's
 //  `-run-selftest` command-line switch, so CI can verify the real binary.

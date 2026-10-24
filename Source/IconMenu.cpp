@@ -12,6 +12,7 @@
 #include "PluginWindow.h"
 #include "Engine/SettingsBackup.h"
 #include "Engine/CrashedPluginRecovery.h"
+#include "Engine/PluginScanWorker.h"
 #include "UI/MainWindow.h"
 #include "Engine/PluginChoice.h"
 #if JUCE_WINDOWS
@@ -39,10 +40,12 @@ public:
 
         const File deadMansPedalFile (IconMenu::crashedPluginsPedal());
 
-        setContentOwned (new PluginListComponent (pluginFormatManager,
+        auto* const list = new PluginListComponent (pluginFormatManager,
             owner.knownPluginList,
             deadMansPedalFile,
-            getAppProperties().getUserSettings()), true);
+            getAppProperties().getUserSettings());
+        list->setNumberOfThreadsForScanning (1);   // the scan only waits for workers: keep the window alive meanwhile
+        setContentOwned (list, true);
 
         setUsingNativeTitleBar (true);
         setResizable (true, false);
@@ -77,6 +80,8 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
 {
     // Initialization
     addDefaultFormatsToManager (formatManager);   // JUCE 8: replaces AudioPluginFormatManager::addDefaultFormats()
+    // Every plugin file is scanned in a child process of its own; a crash there blacklists that file only.
+    knownPluginList.setCustomScanner (std::make_unique<lighthost::scan::OutOfProcessScanner>());
     #if JUCE_WINDOWS
     x = y = 0;
     #endif

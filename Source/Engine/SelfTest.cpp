@@ -6,6 +6,8 @@
 #include "GraphController.h"
 #include "PresetStore.h"
 #include "NodeGeometry.h"
+#include "PluginScanWorker.h"
+#include <cstdlib>
 
 using namespace juce;
 
@@ -108,6 +110,29 @@ namespace
     float peakOf (const AudioBuffer<float>& b, int ch)
     {
         return b.getMagnitude (ch, 0, b.getNumSamples());
+    }
+
+    // Test X helpers. The scan workers are launched from the app exe: the running exe when it is the app
+    // (-run-selftest), the sibling build output when this is LightHostRuntimeTests.
+    File findScanWorkerExe()
+    {
+        const auto self = File::getSpecialLocation (File::currentExecutableFile);
+        if (self.getFileName().startsWithIgnoreCase ("LightHost GUI"))
+            return self;
+
+        const auto config = self.getParentDirectory();   // .../LightHostRuntimeTests_artefacts/<config>
+        return config.getParentDirectory().getParentDirectory().getChildFile ("LightHost_artefacts")
+                     .getChildFile (config.getFileName()).getChildFile ("LightHost GUI.exe");
+    }
+
+    // Workers inherit the environment; an empty value removes the variable.
+    void setEnv (const char* name, const char* value)
+    {
+       #if JUCE_WINDOWS
+        _putenv_s (name, value);
+       #else
+        if (*value != 0) setenv (name, value, 1); else unsetenv (name);
+       #endif
     }
 
     // Locate loadable stereo FX VST3s. Returns their PluginDescriptions.
@@ -2384,6 +2409,108 @@ int runSelfTest (const StringArray& explicitPluginPaths)
             }
             std::cout << "  note peak " << peak << (peak > 1.0e-6f ? "" : "  (silent: instrument may need its sound library)") << std::endl;
             r.expect (std::isfinite (peak), "the note renders finite audio");
+        }
+    }
+
+    //==========================================================================
+    // Test X - plugin scan in a child process (v1.2). One worker per file: a worker that dies or hangs
+    //          before its first reply blacklists exactly that file; one that hangs during the test load
+    //          keeps its descriptions and is not blacklisted. The faults come from LIGHTHOST_SCAN_WORKER_TEST.
+    //          Nothing here scans the VST3 folder, and nothing runs a plugin that may crash in this process.
+    //==========================================================================
+    std::cout << "\n[X] out-of-process plugin scan" << std::endl;
+    {
+        const File exe = findScanWorkerExe();
+        AudioPluginFormat* vst3 = nullptr;
+        for (auto* f : formatManager.getFormats())
+            if (f->getName() == "VST3")
+                vst3 = f;
+
+        r.expect (exe.existsAsFile(), "the scan worker executable exists: " + exe.getFullPathName());
+
+        if (exe.existsAsFile() && vst3 != nullptr)
+        {
+            const auto known = discoverPlugins (formatManager, explicitPluginPaths, 1);
+            const bool haveReal = ! known.isEmpty();
+            const String path = haveReal ? known.getReference (0).fileOrIdentifier
+                                         : File::getSpecialLocation (File::tempDirectory).getChildFile ("lighthost_scan_fault.vst3").getFullPathName();
+            std::cout << "  file: " << path << (haveReal ? "" : "  (no plugin found: fault paths only)") << std::endl;
+
+            const auto millis = [] { return Time::getMillisecondCounter(); };
+            const lighthost::scan::Timeouts quick { 1500, 1500 };
+
+            setEnv (lighthost::scan::kTestEnvVar, "");
+
+            if (haveReal)
+            {
+                lighthost::scan::OutOfProcessScanner scanner (exe);
+                OwnedArray<PluginDescription> viaWorker, inProcess;
+                const auto t0 = millis();
+                const bool ok = scanner.findPluginTypesFor (*vst3, viaWorker, path);
+                const auto ms = millis() - t0;
+                vst3->findAllTypesForFile (inProcess, path);   // one file that already loads in this process
+
+                std::cout << "  one scan through a worker: " << ms << " ms" << std::endl;
+                r.expect (ok && ! viaWorker.isEmpty(), "a known-good file scans through a worker");
+                bool same = viaWorker.size() == inProcess.size();
+                for (int i = 0; same && i < viaWorker.size(); ++i)
+                    same = viaWorker[i]->name == inProcess[i]->name && viaWorker[i]->uniqueId == inProcess[i]->uniqueId
+                        && viaWorker[i]->isInstrument == inProcess[i]->isInstrument
+                        && viaWorker[i]->numInputChannels == inProcess[i]->numInputChannels
+                        && viaWorker[i]->numOutputChannels == inProcess[i]->numOutputChannels;
+                r.expect (same, "the descriptions equal the in-process ones");
+            }
+
+            {
+                setEnv (lighthost::scan::kTestEnvVar, "abort");
+                KnownPluginList list;
+                list.setCustomScanner (std::make_unique<lighthost::scan::OutOfProcessScanner> (exe, quick));
+                OwnedArray<PluginDescription> found;
+                const auto t0 = millis();
+                list.scanAndAddFile (path, false, found, *vst3);
+                r.expect (found.isEmpty() && list.getBlacklistedFiles().contains (path),
+                          "a worker that dies before replying: the file is blacklisted, this process lives");
+                const auto ms = millis() - t0;
+                r.expect (ms < 1400, "a dead worker is noticed at once, not after the timeout (" + String ((int) ms) + " ms)");
+            }
+
+            {
+                setEnv (lighthost::scan::kTestEnvVar, "hang");
+                KnownPluginList list;
+                list.setCustomScanner (std::make_unique<lighthost::scan::OutOfProcessScanner> (exe, quick));
+                OwnedArray<PluginDescription> found;
+                const auto t0 = millis();
+                list.scanAndAddFile (path, false, found, *vst3);
+                const auto ms = millis() - t0;
+                r.expect (found.isEmpty() && list.getBlacklistedFiles().contains (path),
+                          "a worker that never answers: the file is blacklisted after the timeout");
+                r.expect (ms >= 1400 && ms < 15000, "the timeout path took about the timeout (" + String ((int) ms) + " ms)");
+            }
+
+            {
+                setEnv (lighthost::scan::kTestEnvVar, "hang-instantiate");
+                KnownPluginList list;
+                list.setCustomScanner (std::make_unique<lighthost::scan::OutOfProcessScanner> (exe, lighthost::scan::Timeouts { 30000, 1500 }));
+                OwnedArray<PluginDescription> found;
+                list.scanAndAddFile (path, false, found, *vst3);
+                r.expect (! list.getBlacklistedFiles().contains (path), "a test load that never finishes does not blacklist the file");
+                if (haveReal)
+                    r.expect (! found.isEmpty() && list.getNumTypes() == found.size(), "... and the descriptions are kept");
+            }
+
+            setEnv (lighthost::scan::kTestEnvVar, "");
+
+            // HALion Sonic dies on instantiation, on this machine only: run it when asked (LIGHTHOST_TEST_HALION=1).
+            if (SystemStats::getEnvironmentVariable ("LIGHTHOST_TEST_HALION", {}) == "1")
+            {
+                const String halion = "C:\\Program Files\\Common Files\\VST3\\Steinberg\\HALion Sonic.vst3";
+                KnownPluginList list;
+                list.setCustomScanner (std::make_unique<lighthost::scan::OutOfProcessScanner> (exe));
+                OwnedArray<PluginDescription> found;
+                list.scanAndAddFile (halion, false, found, *vst3);
+                std::cout << "  HALion Sonic: " << (list.getBlacklistedFiles().contains (halion) ? "blacklisted" : "kept") << std::endl;
+                r.expect (true, "HALion Sonic through a worker did not take this process down");
+            }
         }
     }
 
