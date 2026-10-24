@@ -573,6 +573,7 @@ void CanvasView::mouseDown (const juce::MouseEvent& e)
     const auto p = e.position;
     panArmed = panning = false;
     pressedCable.reset();
+    badgeDeletedCable = false;
 
     // Right-click on a cable: context menu.
     if (e.mods.isPopupMenu())
@@ -590,6 +591,7 @@ void CanvasView::mouseDown (const juce::MouseEvent& e)
         if (const auto badge = deleteBadgeCentre(); badge.has_value() && badge->getDistanceFrom (p) <= kBadgeRadius + 2.0f)
         {
             deleteSelectedCable();
+            badgeDeletedCable = true;
             return;
         }
 
@@ -708,6 +710,8 @@ void CanvasView::mouseDoubleClick (const juce::MouseEvent& e)
         pressedCable.reset();
         repaint();
     }
+    else if (onZoomFit && ! badgeDeletedCable && outputPortAt (e.position).isEmpty())
+        onZoomFit();   // empty canvas: same as the Fit button
 }
 
 void CanvasView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)

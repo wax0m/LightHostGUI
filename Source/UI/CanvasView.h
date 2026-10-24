@@ -167,6 +167,7 @@ private:
     juce::Point<int> panStartScreen;
     juce::Point<int> panStartView;
     std::optional<CableKey> pressedCable;   // press on a cable: select it on release unless it became a pan
+    bool badgeDeletedCable = false;         // this press deleted the selected cable via its x badge (a following double-click is not a Fit)
     std::optional<CableKey> selection;
 
     float flowPhase = 0.0f;
