@@ -15,20 +15,38 @@
 
 namespace lighthost::scan
 {
-    // The pedal file and every leftover temp file next to it.
+    // "<settings file stem>.<suffix>" next to the settings file, so that every instance (-multi-instance=<name>) keeps
+    // its own crash records: "Light Host.RecentlyCrashedPluginsList", "Light Host.LoadingPlugin", ...
+    inline juce::File perInstanceFile (const juce::File& settingsFile, const juce::String& suffix)
+    {
+        return settingsFile.getSiblingFile (settingsFile.getFileNameWithoutExtension() + "." + suffix);
+    }
+
+    // The fixed name of v1.2 before the per-instance names; still read (and deleted) once.
+    inline juce::File legacyPedal (const juce::File& pedal)
+    {
+        return pedal.getSiblingFile ("RecentlyCrashedPluginsList");
+    }
+
+    inline void addRecordFiles (juce::Array<juce::File>& files, const juce::File& pedal)
+    {
+        if (pedal.existsAsFile())
+            files.addIfNotAlreadyThere (pedal);
+
+        const auto name = pedal.getFileNameWithoutExtension();
+        for (const auto& f : pedal.getParentDirectory().findChildFiles (juce::File::findFiles, false, "." + name + "_temp*"))
+            files.addIfNotAlreadyThere (f);
+    }
+
+    // The pedal file and every leftover temp file next to it, plus the same for the legacy fixed name.
     inline juce::Array<juce::File> crashedPluginRecordFiles (const juce::File& pedal)
     {
         juce::Array<juce::File> files;
         if (pedal == juce::File())
             return files;
 
-        if (pedal.existsAsFile())
-            files.add (pedal);
-
-        const auto name = pedal.getFileNameWithoutExtension();
-        for (const auto& f : pedal.getParentDirectory().findChildFiles (juce::File::findFiles, false, "." + name + "_temp*"))
-            files.add (f);
-
+        addRecordFiles (files, pedal);
+        addRecordFiles (files, legacyPedal (pedal));
         return files;
     }
 

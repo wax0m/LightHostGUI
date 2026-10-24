@@ -135,7 +135,7 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
 
 File IconMenu::crashedPluginsPedal()
 {
-    return getAppProperties().getUserSettings()->getFile().getSiblingFile ("RecentlyCrashedPluginsList");
+    return lighthost::scan::perInstanceFile (getAppProperties().getUserSettings()->getFile(), "RecentlyCrashedPluginsList");
 }
 
 // A one-line notice: on the main window when it exists, otherwise kept for its first opening.

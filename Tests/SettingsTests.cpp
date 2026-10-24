@@ -126,6 +126,25 @@ int runSettingsTests (int& checks)
         check (checks, lighthost::scan::readCrashedPlugins (pedal).isEmpty(), "discard: nothing is read afterwards");
     }
 
+    // (e) per-instance names; the legacy fixed pedal is read and deleted once
+    {
+        const auto def = lighthost::scan::perInstanceFile (dir.getChildFile ("Light Host.settings"), "RecentlyCrashedPluginsList");
+        const auto multi = lighthost::scan::perInstanceFile (dir.getChildFile ("Light Host.test.settings"), "RecentlyCrashedPluginsList");
+        const auto guard = lighthost::scan::perInstanceFile (dir.getChildFile ("Light Host.test.settings"), "LoadingPlugin");
+        check (checks, def.getFileName() == "Light Host.RecentlyCrashedPluginsList", "names: default instance pedal");
+        check (checks, multi.getFileName() == "Light Host.test.RecentlyCrashedPluginsList", "names: multi-instance pedal differs");
+        check (checks, guard.getFileName() == "Light Host.test.LoadingPlugin", "names: load guard file");
+
+        const String a = "C:/VST3/Legacy.vst3", b = "C:/VST3/Mine.vst3";
+        dir.getChildFile ("RecentlyCrashedPluginsList").replaceWithText (a, true, true);
+        def.replaceWithText (b, true, true);
+        auto crashed = lighthost::scan::readCrashedPlugins (def);
+        check (checks, crashed.size() == 2 && crashed.contains (a) && crashed.contains (b), "legacy: old fixed pedal is read with the new one");
+        lighthost::scan::discardCrashedPluginRecords (def);
+        check (checks, ! dir.getChildFile ("RecentlyCrashedPluginsList").exists() && ! def.exists(), "legacy: both are deleted");
+        check (checks, lighthost::scan::readCrashedPlugins (def).isEmpty(), "legacy: nothing is read twice");
+    }
+
     dir.deleteRecursively();
     return failures;
 }
