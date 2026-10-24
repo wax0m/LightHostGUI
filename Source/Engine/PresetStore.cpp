@@ -118,6 +118,36 @@ bool PresetStore::pinLegacyOutputs (int outCh, const String& label, const String
     return changed;
 }
 
+String PresetStore::uniqueCopyName (const String& base) const
+{
+    auto taken = [this] (const String& name)
+    {
+        for (int i = 0; i < getNumPresets(); ++i)
+            if (getPresetName (i).equalsIgnoreCase (name))
+                return true;
+        return false;
+    };
+
+    String candidate = base + " copy";
+    for (int n = 2; taken (candidate); ++n)
+        candidate = base + " copy " + String (n);
+    return candidate;
+}
+
+int PresetStore::duplicatePreset (int index)
+{
+    if (index < 0 || index >= getNumPresets())
+        return -1;
+
+    const int active = getActiveIndex();
+    ValueTree copy = state.getChild (index).createCopy();   // deep copy, graph included
+    copy.setProperty (idName, uniqueCopyName (getPresetName (index)), nullptr);
+    state.addChild (copy, index + 1, nullptr);
+    if (active > index)
+        state.setProperty (idActive, active + 1, nullptr);   // keep pointing at the same preset
+    return index + 1;
+}
+
 void PresetStore::removePreset (int index)
 {
     if (index < 0 || index >= getNumPresets())

@@ -27,6 +27,7 @@ public:
     std::function<void (int)>            onSelectPreset;
     std::function<void()>                onAddPreset;
     std::function<void (int)>            onRenamePreset;
+    std::function<void (int)>            onDuplicatePreset;
     std::function<void()>                onSavePreset;
     std::function<void()>                onDeletePreset;
 

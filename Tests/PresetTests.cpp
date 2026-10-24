@@ -125,5 +125,41 @@ int runPresetTests (int& checks)
         check (checks, ! PresetStore::fromXml (migrated.toXml()).migratedOnLoad, "migrated presets are not migrated again");
     }
 
+    // Duplicate: deep copy right behind the source, unique "copy" names, the active preset stays itself.
+    {
+        PresetStore s;
+        s.addPreset ("A", docWith (1));
+        s.addPreset ("B", docWith (2));
+        s.addPreset ("C", docWith (3));
+        s.setActiveIndex (2);
+
+        check (checks, s.uniqueCopyName ("A") == "A copy", "copy name: first copy is '<name> copy'");
+        const int c1 = s.duplicatePreset (0);
+        check (checks, c1 == 1 && s.getNumPresets() == 4, "duplicate lands right behind its source");
+        check (checks, s.getPresetName (1) == "A copy" && s.getPresetName (2) == "B", "duplicate is named '<name> copy'");
+        check (checks, s.getActiveIndex() == 3 && s.getPresetName (3) == "C",
+               "duplicating before the active preset keeps the active preset itself");
+
+        const int c2 = s.duplicatePreset (0);
+        check (checks, c2 == 1 && s.getPresetName (1) == "A copy 2" && s.getPresetName (2) == "A copy",
+               "second copy is '<name> copy 2'");
+        s.setPresetName (3, "a COPY 3");
+        check (checks, s.uniqueCopyName ("A") == "A copy 4", "copy names skip taken ones, case-insensitively");
+
+        // Deep copy: editing one side leaves the other alone.
+        s.setPresetDocument (1, docWith (5));
+        check (checks, s.getPresetDocument (1).getNodes().getNumChildren() == 7
+                    && s.getPresetDocument (0).getNodes().getNumChildren() == 3
+                    && s.getPresetDocument (2).getNodes().getNumChildren() == 3,
+               "duplicate does not share data with its source");
+
+        check (checks, s.duplicatePreset (-1) == -1 && s.duplicatePreset (99) == -1, "duplicate of a bad index is refused");
+
+        const PresetStore round = PresetStore::fromXml (s.toXml());
+        check (checks, round.getNumPresets() == s.getNumPresets() && round.getActiveIndex() == s.getActiveIndex()
+                    && round.getPresetName (1) == "A copy 2" && round.getPresetName (2) == "A copy",
+               "copies survive the XML round-trip in order");
+    }
+
     return failures;
 }

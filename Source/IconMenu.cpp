@@ -376,6 +376,31 @@ void IconMenu::addPreset()
         mainWindow->refreshPresets();
 }
 
+void IconMenu::duplicatePreset (int index)
+{
+    const int active = store.getActiveIndex();
+    if (index < 0 || index >= store.getNumPresets())
+        return;
+
+    // Fold the live graph (plugin states included) into the active preset first, so the copy of the active
+    // one is the live scene.
+    if (active >= 0)
+        store.setPresetDocument (active, controller.snapshotDocument());
+
+    const int copy = store.duplicatePreset (index);
+    if (copy < 0)
+        return;
+    if (index == active)
+        store.setActiveIndex (copy);   // live doc already equals the copy: no reload, plugins stay loaded
+
+    auto& settings = *getAppProperties().getUserSettings();
+    settings.setValue ("presets", store.toXml());
+    settings.saveIfNeeded();
+
+    if (mainWindow != nullptr)
+        mainWindow->refreshPresets();
+}
+
 void IconMenu::renamePreset (int index)
 {
     if (index < 0 || index >= store.getNumPresets())
@@ -780,6 +805,7 @@ void IconMenu::showMainWindow()
         cb.selectPreset = [this] (int i) { switchToPreset (i); };
         cb.addPreset    = [this] { addPreset(); };
         cb.renamePreset = [this] (int i) { renamePreset (i); };
+        cb.duplicatePreset = [this] (int i) { duplicatePreset (i); };
         cb.savePreset   = [this] { saveActivePreset(); };
         cb.deletePreset = [this] { deleteActivePreset(); };
         cb.sampleRate   = [this]

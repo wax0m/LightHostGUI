@@ -38,6 +38,12 @@ public:
     void setPresetDocument (int index, const GraphDocument&);         // overwrite (== "save")
     GraphDocument getPresetDocument (int index) const;               // load (default doc if OOR)
     void removePreset (int index);
+    // "<base> copy", then "<base> copy 2", "copy 3"... — the first name no preset uses (case-insensitive).
+    juce::String uniqueCopyName (const juce::String& base) const;
+    // Deep-copies preset `index` right behind itself under uniqueCopyName(). Returns the new index (-1 if
+    // `index` is out of range). The active preset stays the same preset (its index shifts when the copy lands
+    // before it); the caller activates the copy if it wants to.
+    int duplicatePreset (int index);
     // Stamp the unbound OUT nodes of EVERY stored preset (see GraphDocument::pinLegacyOutputs).
     bool pinLegacyOutputs (int outCh, const juce::String& label, const juce::String& device);
 

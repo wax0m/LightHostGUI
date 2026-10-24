@@ -37,6 +37,7 @@ public:
         std::function<void (int)>                        selectPreset;
         std::function<void()>                            addPreset;
         std::function<void (int)>                        renamePreset;
+        std::function<void (int)>                        duplicatePreset;
         std::function<void()>                            savePreset;
         std::function<void()>                            deletePreset;
         // Live device stats for the title bar readout.

@@ -63,6 +63,7 @@ private:
     void persistPresets();                 // snapshot active + write settings
     void switchToPreset (int index);
     void addPreset();
+    void duplicatePreset (int index);
     void renamePreset (int index);
     void saveActivePreset();
     void deleteActivePreset();

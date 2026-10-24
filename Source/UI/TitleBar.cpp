@@ -180,6 +180,7 @@ void TitleBar::showSettingsMenu()
     m.addSectionHeader ("PRESET");
     m.addItem (3, "Save Preset");
     m.addItem (4, juce::String::fromUTF8 ("Rename Preset…"));
+    m.addItem (6, "Duplicate Preset");
     m.addItem (5, "Delete Preset");
 
     settingsHot = true;
@@ -194,6 +195,7 @@ void TitleBar::showSettingsMenu()
             else if (r == 2 && onEditPlugins) onEditPlugins();
             else if (r == 3 && onSavePreset)  onSavePreset();
             else if (r == 4 && onRenamePreset && getActivePreset) onRenamePreset (getActivePreset());
+            else if (r == 6 && onDuplicatePreset && getActivePreset) onDuplicatePreset (getActivePreset());
             else if (r == 5 && onDeletePreset) onDeletePreset();
         });
 }
