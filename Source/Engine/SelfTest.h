@@ -31,6 +31,7 @@
 //    W. output nodes bound to device channel pairs: strict bindings, inactive pairs, legacy pinning, other device (fake processors).
 //    X. plugin scan in a child process: a good file scans, a worker that dies / hangs blacklists that file only, a hung test load does not.
 //    Y. a module the user has used stays mapped: a pinned DLL survives FreeLibrary, a plugin instantiated by the controller is pinned.
+//    Z. load guard + suspended plugins: the guard file is gone after every gesture, a suspended file loads as a stand-in everywhere until a retry works.
 //
 //  Used by both the LightHostRuntimeTests console target and the shipping app's
 //  `-run-selftest` command-line switch, so CI can verify the real binary.

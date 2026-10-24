@@ -5,6 +5,8 @@
 
 #include "../Source/Engine/SettingsBackup.h"
 #include "../Source/Engine/CrashedPluginRecovery.h"
+#include "../Source/Engine/LoadGuard.h"
+#include "../Source/Engine/PluginChoice.h"
 #include <iostream>
 
 using namespace juce;
@@ -143,6 +145,60 @@ int runSettingsTests (int& checks)
         lighthost::scan::discardCrashedPluginRecords (def);
         check (checks, ! dir.getChildFile ("RecentlyCrashedPluginsList").exists() && ! def.exists(), "legacy: both are deleted");
         check (checks, lighthost::scan::readCrashedPlugins (def).isEmpty(), "legacy: nothing is read twice");
+    }
+
+    // (f) load guard files and the persistent suspended list
+    {
+        const auto gfile = lighthost::scan::perInstanceFile (dir.getChildFile ("Light Host.settings"), "LoadingPlugin");
+        const String path = "C:/VST3/Steinberg/Groove Agent SE.vst3", name = "Groove Agent SE";
+        check (checks, ! lighthost::guard::readGuard (gfile).has_value(), "guard: absent file reads as none");
+
+        check (checks, lighthost::guard::writeGuard (gfile, path, name), "guard: written");
+        auto rec = lighthost::guard::readGuard (gfile);
+        check (checks, rec.has_value() && rec->path == path && rec->name == name, "guard: path and name round-trip");
+
+        lighthost::guard::writeGuard (gfile, "C:/VST3/Other.vst3", "Other");
+        rec = lighthost::guard::readGuard (gfile);
+        check (checks, rec.has_value() && rec->path == "C:/VST3/Other.vst3", "guard: the next write replaces the record");
+
+        gfile.replaceWithText ("");
+        check (checks, ! lighthost::guard::readGuard (gfile).has_value(), "guard: an empty file is not trusted");
+        gfile.replaceWithText (dir.getChildFile ("Groove Agent SE.vst3").getFullPathName() + String::charToString (10));
+        rec = lighthost::guard::readGuard (gfile);
+        check (checks, rec.has_value() && rec->name == "Groove Agent SE", "guard: a missing name falls back to the file name");
+
+        lighthost::guard::clearGuard (gfile);
+        check (checks, ! gfile.exists() && ! lighthost::guard::readGuard (gfile).has_value(), "guard: cleared");
+        check (checks, lighthost::guard::loadGuardNotice (name).startsWith ("LightHost closed while loading Groove Agent SE."),
+               "guard: notice wording");
+
+        // The suspended list survives a real settings save / load.
+        StringArray list { path, "C:/VST3/Other.vst3" };
+        {
+            const auto file = dir.getChildFile ("susp.settings");
+            {
+                PropertiesFile props (file, optionsFor (file));
+                props.setValue ("suspendedPlugins", lighthost::guard::suspendedToString (list));
+                props.saveIfNeeded();
+            }
+            PropertiesFile props (file, optionsFor (file));
+            const auto loaded = lighthost::guard::suspendedFromString (props.getValue ("suspendedPlugins"));
+            check (checks, loaded == list, "suspended: list survives save and load");
+            check (checks, lighthost::guard::isSuspended (loaded, "c:/vst3/steinberg/groove agent se.vst3"), "suspended: case-insensitive match");
+            check (checks, ! lighthost::guard::isSuspended (loaded, "C:/VST3/Third.vst3") && ! lighthost::guard::isSuspended (loaded, ""),
+                   "suspended: other files and empty names do not match");
+        }
+        check (checks, lighthost::guard::suspendedFromString ("").isEmpty(), "suspended: empty value is an empty list");
+
+        // loadablePlugins: a suspended file is filtered out, its description stays in the stored list.
+        Array<PluginDescription> known;
+        PluginDescription a, b;
+        a.name = "Groove Agent SE"; a.pluginFormatName = "VST3"; a.fileOrIdentifier = path;
+        b.name = "Other"; b.pluginFormatName = "VST3"; b.fileOrIdentifier = "C:/VST3/Third.vst3";
+        known.add (a); known.add (b);
+        const auto offered = lighthost::choice::filterLoadable (known, StringArray { "VST3" }, StringArray (path));
+        check (checks, offered.size() == 1 && offered[0].name == "Other" && known.size() == 2, "loadable: a suspended file is not offered");
+        check (checks, lighthost::choice::filterLoadable (known, StringArray { "VST3" }).size() == 2, "loadable: nothing suspended, nothing hidden");
     }
 
     dir.deleteRecursively();

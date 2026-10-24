@@ -204,6 +204,7 @@ void GraphController::rebuild()
 
 void GraphController::rebuildNow()
 {
+    const GuardScope guardScope (*this);
     // INVARIANT: the window-close pump below must stay the FIRST statement. It can
     // dispatch queued edits, which are only safe because the live graph and
     // uidToNodeId are still intact at that point — never move teardown above it.
@@ -297,6 +298,8 @@ AudioProcessorGraph::Node* GraphController::addPluginNodeToGraph (const ValueTre
 std::unique_ptr<AudioProcessor> GraphController::createInstanceFrom (const PluginDescription& desc)
 {
     std::unique_ptr<AudioProcessor> created;
+    if (loadGuardFile != File())   // kept until the gesture ends: the crash may come later, in setState or publish
+        lighthost::guard::writeGuard (loadGuardFile, desc.fileOrIdentifier, desc.name);
     if (instanceFactory)
         created = instanceFactory (desc);
     else
@@ -322,6 +325,9 @@ std::unique_ptr<AudioProcessor> GraphController::createPluginInstanceFor (const 
     const auto desc = GraphDocument::getPluginDescription (nodeTree);
     if (! desc.has_value())
         return nullptr;
+
+    if (! explicitRetry && isSuspendedFile (desc->fileOrIdentifier))
+        return nullptr;   // suspended after it killed a start: stand-in, the state stays in the document
 
     auto created = createInstanceFrom (*desc);
     if (created == nullptr)
@@ -389,9 +395,19 @@ bool GraphController::swapInRecoveredPlugin (const String& uid)
     if (! nodeTree.isValid())
         return false;
 
+    const GuardScope guardScope (*this);
+    const ScopedValueSetter<bool> retrying (explicitRetry, true);
     auto instance = createPluginInstanceFor (nodeTree);
     if (instance == nullptr)
         return false;
+
+    if (const auto desc = GraphDocument::getPluginDescription (nodeTree);
+        desc.has_value() && isSuspendedFile (desc->fileOrIdentifier))
+    {
+        suspendedFiles.removeString (desc->fileOrIdentifier, true);   // it loaded: lift the suspension for good
+        if (onSuspendedChanged)
+            onSuspendedChanged();
+    }
 
     removePluginNodeFromGraph (uid);
     const bool registered = registerPluginNode (nodeTree, std::move (instance)) != nullptr;
@@ -401,6 +417,7 @@ bool GraphController::swapInRecoveredPlugin (const String& uid)
 
 bool GraphController::retryMissingPlugin (const String& uid)
 {
+    const GuardScope guardScope (*this);
     if (! swapInRecoveredPlugin (uid))
         return false;
 
@@ -410,6 +427,7 @@ bool GraphController::retryMissingPlugin (const String& uid)
 
 int GraphController::retryMissingPlugins()
 {
+    const GuardScope guardScope (*this);
     // Copy first: a successful swap erases its uid from missingPlugins.
     const std::vector<String> candidates (missingPlugins.begin(), missingPlugins.end());
 
@@ -500,6 +518,7 @@ GraphController::ReplaceResult GraphController::replacePlugin (const String& uid
                                                                const MemoryBlock* fallbackState)
 {
     ReplaceResult result;
+    const GuardScope guardScope (*this);
 
     ValueTree nodeTree = document.getNodeByUid (uid);
     if (! nodeTree.isValid() || nodeTree.getProperty ("type").toString() != GraphDocument::typePlugin)
@@ -633,6 +652,7 @@ String GraphController::addPluginNodeAtNextSlot (const PluginDescription& desc)
 
 String GraphController::addSourcePlugin (const PluginDescription& desc)
 {
+    const GuardScope guardScope (*this);
     const String uid = addPluginNodeAtNextSlot (desc);
     const String out = document.getIoNodeUid (false);
     document.addConnection (uid, 0, out, 0);
@@ -655,6 +675,7 @@ String GraphController::addPlugin (const PluginDescription& desc)
 
 String GraphController::appendToChain (const PluginDescription& desc)
 {
+    const GuardScope guardScope (*this);
     if (GraphDocument::isSourceDescription (desc))
         return addSourcePlugin (desc);   // an instrument has no place in a serial effect chain
 
@@ -673,6 +694,7 @@ String GraphController::appendToChain (const PluginDescription& desc)
 
 String GraphController::addNodeUnconnected (const PluginDescription& desc)
 {
+    const GuardScope guardScope (*this);
     if (GraphDocument::isSourceDescription (desc))
         return addSourcePlugin (desc);
 

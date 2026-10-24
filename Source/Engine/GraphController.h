@@ -24,6 +24,7 @@
 #include "MonoInputProcessor.h"
 #include "MixProcessor.h"
 #include "OutputGuardProcessor.h"
+#include "LoadGuard.h"
 
 class GraphController
 {
@@ -196,6 +197,16 @@ public:
 
     GraphDocument document;
 
+    // Load guard (see LoadGuard.h). The guard file is written before every main-process instantiation and
+    // removed when the gesture that caused it has finished. Plugin files on the suspended list are never
+    // instantiated (their nodes are stand-ins, in every preset) until an explicit retry succeeds; that
+    // removes the file from the list and calls onSuspendedChanged so the owner can persist it.
+    void setLoadGuardFile (const File& f) { loadGuardFile = f; }
+    void setSuspendedFiles (const StringArray& files) { suspendedFiles = files; }
+    const StringArray& getSuspendedFiles() const noexcept { return suspendedFiles; }
+    bool isSuspendedFile (const String& pluginFile) const { return lighthost::guard::isSuspended (suspendedFiles, pluginFile); }
+    std::function<void()> onSuspendedChanged;
+
     // Test seam: when set, plugin instances come from here instead of the format manager
     // (a null result is a plugin that can't load). Production code never sets it.
     std::function<std::unique_ptr<AudioProcessor> (const PluginDescription&)> instanceFactory;
@@ -279,6 +290,17 @@ private:
     bool migratedOnLoad = false;
     bool rebuilding = false;
     bool rebuildPending = false;
+
+    File loadGuardFile;
+    StringArray suspendedFiles;
+    bool explicitRetry = false;   // true only inside a user-requested retry: suspension is lifted for it
+    int guardDepth = 0;           // gestures in progress; the guard file is removed when the outermost ends
+    struct GuardScope
+    {
+        explicit GuardScope (GraphController& c) : owner (c) { ++owner.guardDepth; }
+        ~GuardScope() { if (--owner.guardDepth == 0) lighthost::guard::clearGuard (owner.loadGuardFile); }
+        GraphController& owner;
+    };
 
     JUCE_DECLARE_NON_COPYABLE (GraphController)
 };

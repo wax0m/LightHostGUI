@@ -8,6 +8,7 @@
 #include "NodeGeometry.h"
 #include "PluginScanWorker.h"
 #include "ModulePin.h"
+#include "PluginChoice.h"
 #include <cstdlib>
 
 using namespace juce;
@@ -2569,6 +2570,96 @@ int runSelfTest (const StringArray& explicitPluginPaths)
                       "a plugin instantiated by the controller is pinned");
            #endif
         }
+    }
+
+    //==========================================================================
+    // Test Z - load guard + suspended plugins (v1.2 safe-load). The guard file exists while a plugin is being
+    //          instantiated and is gone after every finished gesture (add / rebuild / replace / retry). A
+    //          suspended plugin file is never instantiated: its node is a stand-in with the saved state intact,
+    //          also in another preset and after a save / load, until an explicit retry loads it (then the
+    //          suspension is lifted and the owner is told). Fake processors, temp files only.
+    //==========================================================================
+    std::cout << "\n[Z] load guard and suspended plugins" << std::endl;
+    {
+        const auto hungDesc = fakeDescription ("HungSynth", false);
+        const auto goodDesc = fakeDescription ("GoodFx", false);
+
+        GraphFixture fx (formatManager, "loadguard");
+        GraphController& controller = *fx.controller;
+        const auto reload = [&controller] { controller.loadDocument (GraphDocument::fromXml (controller.document.toXml())); };
+        const File guardFile = fx.file.getSiblingFile ("loadguard.LoadingPlugin");
+        guardFile.deleteFile();
+        controller.setLoadGuardFile (guardFile);
+
+        std::vector<String> created;
+        bool guardSeenDuringLoad = false;
+        controller.instanceFactory = [&] (const PluginDescription& d) -> std::unique_ptr<AudioProcessor>
+        {
+            created.push_back (d.name);
+            const auto rec = lighthost::guard::readGuard (guardFile);
+            guardSeenDuringLoad = rec.has_value() && rec->path == d.fileOrIdentifier && rec->name == d.name;
+            return std::make_unique<FakeEffect>();
+        };
+
+        const String good = controller.addPlugin (goodDesc);
+        r.expect (guardSeenDuringLoad, "the guard names the plugin while it is being instantiated");
+        r.expect (! guardFile.exists(), "an add leaves no guard file behind");
+
+        const String hung = controller.addPlugin (hungDesc);
+        r.expect (hung.isNotEmpty() && ! controller.isMissing (hung) && ! guardFile.exists(), "a normal plugin loads and clears the guard");
+
+        reload();
+        r.expect (! guardFile.exists(), "a rebuild leaves no guard file behind");
+
+        // Suspend the file, as the start-up recovery does after a crash.
+        controller.setSuspendedFiles (StringArray (hungDesc.fileOrIdentifier));
+        int notified = 0;
+        controller.onSuspendedChanged = [&] { ++notified; };
+
+        created.clear();
+        reload();
+        r.expect (controller.isMissing (hung) && ! controller.isMissing (good), "a suspended file loads as a stand-in, the others load");
+        r.expect (std::find (created.begin(), created.end(), "HungSynth") == created.end(), "a suspended file is never instantiated");
+        r.expect (! guardFile.exists(), "the guard is gone after the rebuild");
+
+        // The saved state stays in the document, and the suspension holds for a node in another preset.
+        controller.document.getNodeByUid (hung).setProperty ("state", "c3RhdGU=", nullptr);   // base64 "state"
+        controller.save (*fx.settings);
+        const auto savedXml = controller.document.toXml();
+        {
+            AudioProcessorGraph graph2;
+            graph2.setPlayConfigDetails (2, 2, 44100.0, 512);
+            graph2.prepareToPlay (44100.0, 512);
+            GraphController second (graph2, formatManager);
+            second.setLoadGuardFile (guardFile);
+            second.setSuspendedFiles (lighthost::guard::suspendedFromString (lighthost::guard::suspendedToString (controller.getSuspendedFiles())));
+            second.instanceFactory = controller.instanceFactory;
+            created.clear();
+            second.loadDocument (GraphDocument::fromXml (savedXml));
+            r.expect (second.isMissing (hung), "the suspension survives a settings round trip and applies to another preset's node");
+            r.expect (std::find (created.begin(), created.end(), "HungSynth") == created.end(), "the other preset did not instantiate it either");
+            r.expect (second.document.getNodeByUid (hung).getProperty ("state").toString() == "c3RhdGU=", "the saved state is intact");
+        }
+        reload();
+
+        // An explicit retry loads it, lifts the suspension and tells the owner.
+        r.expect (controller.retryMissingPlugin (hung), "an explicit retry loads a suspended plugin");
+        r.expect (! controller.isMissing (hung) && ! controller.isSuspendedFile (hungDesc.fileOrIdentifier), "the retry lifts the suspension");
+        r.expect (notified == 1 && ! guardFile.exists(), "the owner is told once and the guard is cleared");
+
+        // A retry that cannot load keeps the suspension.
+        controller.setSuspendedFiles (StringArray (hungDesc.fileOrIdentifier));
+        controller.instanceFactory = [] (const PluginDescription&) -> std::unique_ptr<AudioProcessor> { return nullptr; };
+        reload();
+        r.expect (! controller.retryMissingPlugin (hung) && controller.isSuspendedFile (hungDesc.fileOrIdentifier), "a failed retry keeps it suspended");
+
+        // Replace / ADD choosers: a suspended file is not offered, its description stays in the list.
+        Array<PluginDescription> known;
+        known.add (hungDesc);
+        known.add (goodDesc);
+        const auto offered = lighthost::choice::filterLoadable (known, StringArray { "VST3" }, controller.getSuspendedFiles());
+        r.expect (offered.size() == 1 && offered[0].name == "GoodFx" && known.size() == 2, "a suspended file is filtered out of the loadable plugins");
+        guardFile.deleteFile();
     }
 
     //==========================================================================

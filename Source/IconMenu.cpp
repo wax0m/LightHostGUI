@@ -104,6 +104,7 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
         knownPluginList.recreateFromXml (*savedPluginList);
     pluginSortMethod = KnownPluginList::sortByManufacturer;
     recoverCrashedPlugins();   // before any scan and before the change listener: saves the blacklist itself
+    recoverLoadGuard();   // a plugin that killed the last start becomes a stand-in before the graph is built
     knownPluginList.addChangeListener (this);
     // The device's output layout first, so the graph is built on the right pair straight away.
     controller.setOutputLayout (currentOutputLayout());
@@ -215,6 +216,47 @@ void IconMenu::recoverCrashedPlugins()
     lighthost::scan::discardCrashedPluginRecords (pedal);
 
     postNotice (lighthost::scan::crashedPluginsNotice (added));
+}
+
+void IconMenu::saveSuspendedPlugins()
+{
+    auto* const settings = getAppProperties().getUserSettings();
+    settings->setValue ("suspendedPlugins", lighthost::guard::suspendedToString (controller.getSuspendedFiles()));
+    settings->saveIfNeeded();
+}
+
+// A guard file left from the last run names the plugin that was loading when the process died. Suspend its
+// file (persistently: every node using it loads as a stand-in, in the live graph and in every preset),
+// blacklist it, save both BEFORE the guard is deleted, and tell the user without a dialog.
+void IconMenu::recoverLoadGuard()
+{
+    auto* const settings = getAppProperties().getUserSettings();
+    const auto guardFile = lighthost::scan::perInstanceFile (settings->getFile(), "LoadingPlugin");
+
+    controller.setSuspendedFiles (lighthost::guard::suspendedFromString (settings->getValue ("suspendedPlugins")));
+    controller.setLoadGuardFile (guardFile);
+    controller.onSuspendedChanged = [this] { saveSuspendedPlugins(); };
+
+    const auto record = lighthost::guard::readGuard (guardFile);
+    if (! record.has_value())
+    {
+        lighthost::guard::clearGuard (guardFile);   // empty or damaged file
+        return;
+    }
+
+    auto suspended = controller.getSuspendedFiles();
+    suspended.addIfNotAlreadyThere (record->path);
+    controller.setSuspendedFiles (suspended);
+    lighthost::scan::blacklistCrashedPlugins (knownPluginList, StringArray (record->path));
+
+    settings->setValue ("suspendedPlugins", lighthost::guard::suspendedToString (suspended));
+    if (auto xml = knownPluginList.createXml())
+        settings->setValue ("pluginList", xml.get());
+    if (! settings->saveIfNeeded())
+        return;   // keep the guard: the next start tries again (the suspension still holds this session)
+
+    lighthost::guard::clearGuard (guardFile);
+    postNotice (lighthost::guard::loadGuardNotice (record->name));
 }
 
 IconMenu::~IconMenu()
@@ -834,7 +876,7 @@ juce::Array<PluginDescription> IconMenu::loadablePlugins() const
     StringArray formats;
     for (int i = 0; i < formatManager.getNumFormats(); ++i)
         formats.add (formatManager.getFormat (i)->getName());
-    return lighthost::choice::filterLoadable (knownPluginList.getTypes(), formats);
+    return lighthost::choice::filterLoadable (knownPluginList.getTypes(), formats, controller.getSuspendedFiles());
 }
 
 // Card menu -> Replace with…: loadable plugins only, the likely successors on top. Non-modal

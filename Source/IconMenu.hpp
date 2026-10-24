@@ -48,6 +48,10 @@ private:
     // Dead man's pedal of the plugin scan (next to the settings file) and what a crash left in it.
     static File crashedPluginsPedal();
     void recoverCrashedPlugins();
+    // Load guard: a plugin that killed the last start is blacklisted and suspended (stand-in everywhere, also
+    // after a restart) until an explicit retry loads it. Runs before the graph is loaded.
+    void recoverLoadGuard();
+    void saveSuspendedPlugins();
     void postNotice (const String& notice);   // main window now, or at its first opening
     void syncMidiInputs();                    // start and every change of the MIDI device list
     // Output pairs (v1.2 B): the open device's active output channels go to the controller, and the
