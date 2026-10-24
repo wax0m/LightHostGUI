@@ -162,6 +162,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/OutputTests.cpp
         Tests/ScanWorkerTests.cpp
         Tests/ModulePinTests.cpp
+        Tests/MidiInputPlanTests.cpp
         Source/Engine/ModulePin.cpp
         Source/Engine/GraphDocument.cpp
     )

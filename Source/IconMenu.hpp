@@ -48,6 +48,8 @@ private:
     // Dead man's pedal of the plugin scan (next to the settings file) and what a crash left in it.
     static File crashedPluginsPedal();
     void recoverCrashedPlugins();
+    void postNotice (const String& notice);   // main window now, or at its first opening
+    void syncMidiInputs();                    // start and every change of the MIDI device list
     // Output pairs (v1.2 B): the open device's active output channels go to the controller, and the
     // unbound OUT nodes (live document + every stored preset) are bound to its first active pair, so
     // enabling more channels later can't move the feed.
@@ -74,6 +76,8 @@ private:
     PresetStore store;
     bool isShutDown = false;
     bool deferredSavePending = false;   // one delayed save after a by-position import (see showReplacePluginMenu)
+    MidiDeviceListConnection midiListConnection;
+    StringArray midiSeenIds;   // identifiers of the MIDI inputs listed the last time
     String startupNotice;    // one-line notice for the main window when it first opens
     String presetsWarning;   // set by loadPresets() when the saved presets were unreadable
     #if JUCE_WINDOWS

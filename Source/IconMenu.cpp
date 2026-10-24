@@ -13,6 +13,7 @@
 #include "Engine/SettingsBackup.h"
 #include "Engine/CrashedPluginRecovery.h"
 #include "Engine/PluginScanWorker.h"
+#include "Engine/MidiInputPlan.h"
 #include "UI/MainWindow.h"
 #include "Engine/PluginChoice.h"
 #if JUCE_WINDOWS
@@ -92,9 +93,11 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
     deviceManager.addAudioCallback (&player);
     // MIDI inputs -> player -> graph's midiInputNode (M7). The player is a
     // MidiInputCallback and forwards MIDI into the graph it drives.
-    for (auto& mi : MidiInput::getAvailableDevices())
-        deviceManager.setMidiInputDeviceEnabled (mi.identifier, true);
+    syncMidiInputs();
     deviceManager.addMidiInputDeviceCallback ({}, &player);   // {} = all enabled inputs
+    // A keyboard switched on after LightHost started is opened without a restart; the callback fires only when the
+    // system's device list changes (no timer).
+    midiListConnection = MidiDeviceListConnection::make ([this] { syncMidiInputs(); });
     // Plugins - known list
     auto savedPluginList = getAppProperties().getUserSettings()->getXmlValue ("pluginList");
     if (savedPluginList != nullptr)
@@ -135,6 +138,58 @@ File IconMenu::crashedPluginsPedal()
     return getAppProperties().getUserSettings()->getFile().getSiblingFile ("RecentlyCrashedPluginsList");
 }
 
+// A one-line notice: on the main window when it exists, otherwise kept for its first opening.
+void IconMenu::postNotice (const String& notice)
+{
+    if (notice.isEmpty())
+        return;
+
+    if (mainWindow != nullptr)
+        mainWindow->showNotice (notice);
+    else
+        startupNotice = startupNotice.isEmpty() ? notice : startupNotice + "  |  " + notice;
+}
+
+// Opens the MIDI inputs that are present and not open, closes the handle of one that went away (so that it is
+// opened afresh when it comes back) and reports an input another app holds.
+void IconMenu::syncMidiInputs()
+{
+    if (isShutDown)
+        return;
+
+    Array<lighthost::midi::Device> available;
+    for (const auto& d : MidiInput::getAvailableDevices())
+        available.add ({ d.name, d.identifier });
+
+    StringArray enabledIds;
+    for (const auto& d : available)
+        if (deviceManager.isMidiInputDeviceEnabled (d.identifier))
+            enabledIds.add (d.identifier);
+    for (const auto& id : midiSeenIds)   // a gone device may still count as open
+        if (deviceManager.isMidiInputDeviceEnabled (id))
+            enabledIds.addIfNotAlreadyThere (id);
+
+    const auto plan = lighthost::midi::planMidiInputs (available, midiSeenIds, enabledIds);
+
+    for (const auto& id : plan.toDisable)
+        deviceManager.setMidiInputDeviceEnabled (id, false);
+
+    StringArray busy;
+    for (const auto& d : plan.toEnable)
+    {
+        deviceManager.setMidiInputDeviceEnabled (d.identifier, false);   // drop a stale handle of the same id, if any
+        deviceManager.setMidiInputDeviceEnabled (d.identifier, true);
+        if (! deviceManager.isMidiInputDeviceEnabled (d.identifier))
+            busy.add (d.name);
+    }
+
+    midiSeenIds.clear();
+    for (const auto& d : available)
+        midiSeenIds.add (d.identifier);
+
+    postNotice (lighthost::midi::midiInUseNotice (busy));
+}
+
 // A plugin that kills the process during a scan is named by the dead man's pedal. Blacklist it, save the
 // list (before the files are deleted, so another crash cannot lose it) and tell the user without a dialog.
 void IconMenu::recoverCrashedPlugins()
@@ -159,14 +214,7 @@ void IconMenu::recoverCrashedPlugins()
 
     lighthost::scan::discardCrashedPluginRecords (pedal);
 
-    const auto notice = lighthost::scan::crashedPluginsNotice (added);
-    if (notice.isEmpty())
-        return;
-
-    if (mainWindow != nullptr)
-        mainWindow->showNotice (notice);
-    else
-        startupNotice = notice;   // shown when the main window opens
+    postNotice (lighthost::scan::crashedPluginsNotice (added));
 }
 
 IconMenu::~IconMenu()
@@ -179,6 +227,7 @@ void IconMenu::shutdownCleanly()
     if (isShutDown)
         return;
     isShutDown = true;
+    midiListConnection.reset();
 
     // UI stops polling the controller before anything below is torn down.
     stopTimer();
