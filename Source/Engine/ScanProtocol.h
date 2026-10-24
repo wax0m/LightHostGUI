@@ -29,7 +29,17 @@ namespace lighthost::scan
     //   abort             worker dies before line 1
     //   hang              worker never answers
     //   hang-instantiate  worker sends line 1, then never finishes the test load
+    //   noise             a "plugin" prints to stdout / stderr before and between the lines (the worker must swallow it)
+    //   noise-protocol    junk lines arrive on the protocol channel itself (the host must skip them)
+    //   spawn-child       worker starts a helper process (its pid goes to the file in kTestPidFileEnvVar), then hangs
     inline const char* const kTestEnvVar = "LIGHTHOST_SCAN_WORKER_TEST";
+    inline const char* const kTestPidFileEnvVar = "LIGHTHOST_SCAN_WORKER_PIDFILE";
+
+    // Every protocol line starts with this. A plugin that prints to stdout cannot be told apart from the
+    // worker by position, so the host keeps only lines that carry it and skips the rest (C-R1).
+    inline const juce::String kLinePrefix = "@LHSCAN1 ";
+
+    inline bool isProtocolLine (const juce::String& line) { return line.startsWith (kLinePrefix); }
 
     //==========================================================================
     struct Request
@@ -66,16 +76,16 @@ namespace lighthost::scan
         juce::XmlElement xml ("LIST");
         for (const auto* d : found)
             xml.addChildElement (d->createXml().release());
-        return "L " + xml.toString (juce::XmlElement::TextFormat().singleLine().withoutHeader()) + "\n";
+        return kLinePrefix + "L " + xml.toString (juce::XmlElement::TextFormat().singleLine().withoutHeader()) + "\n";
     }
 
     // nullopt when the line is not a list line. Entries that do not parse are skipped.
     inline std::optional<std::vector<juce::PluginDescription>> decodeListLine (const juce::String& line)
     {
-        if (! line.startsWith ("L "))
+        if (! line.startsWith (kLinePrefix + "L "))
             return std::nullopt;
 
-        const auto xml = juce::parseXML (line.substring (2));
+        const auto xml = juce::parseXML (line.substring (kLinePrefix.length() + 2));
         if (xml == nullptr || ! xml->hasTagName ("LIST"))
             return std::nullopt;
 
@@ -92,15 +102,15 @@ namespace lighthost::scan
     // Line 2.
     inline juce::String encodeInstantiatedLine (bool ok)
     {
-        return juce::String ("I ") + (ok ? "1" : "0") + "\n";
+        return kLinePrefix + "I " + (ok ? "1" : "0") + "\n";
     }
 
     // nullopt when the line is not an instantiated line.
     inline std::optional<bool> decodeInstantiatedLine (const juce::String& line)
     {
         const auto t = line.trim();
-        if (t == "I 1") return true;
-        if (t == "I 0") return false;
+        if (t == kLinePrefix + "I 1") return true;
+        if (t == kLinePrefix + "I 0") return false;
         return std::nullopt;
     }
 

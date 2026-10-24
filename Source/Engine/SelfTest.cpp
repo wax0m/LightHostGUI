@@ -10,6 +10,11 @@
 #include "ModulePin.h"
 #include "PluginChoice.h"
 #include <cstdlib>
+#if JUCE_WINDOWS
+ #include <windows.h>
+ #undef near   // legacy macros that break local names
+ #undef far
+#endif
 
 using namespace juce;
 
@@ -2499,6 +2504,54 @@ int runSelfTest (const StringArray& explicitPluginPaths)
                 if (haveReal)
                     r.expect (! found.isEmpty() && list.getNumTypes() == found.size(), "... and the descriptions are kept");
             }
+
+            // C-R1: a plugin that prints around the protocol lines is neither blacklisted nor does it change the result.
+            for (const char* mode : { "noise", "noise-protocol" })
+            {
+                setEnv (lighthost::scan::kTestEnvVar, mode);
+                KnownPluginList list;
+                list.setCustomScanner (std::make_unique<lighthost::scan::OutOfProcessScanner> (exe));
+                OwnedArray<PluginDescription> found, inProcess;
+                list.scanAndAddFile (path, false, found, *vst3);
+                r.expect (! list.getBlacklistedFiles().contains (path), String ("worker output noise (") + mode + "): the file is not blacklisted");
+                if (haveReal)
+                {
+                    vst3->findAllTypesForFile (inProcess, path);
+                    r.expect (! found.isEmpty() && found.size() == inProcess.size() && found[0]->name == inProcess[0]->name,
+                              String ("worker output noise (") + mode + "): the descriptions are the same");
+                }
+            }
+
+           #if JUCE_WINDOWS
+            // C-R3: killing a worker takes its helper processes with it (the job object).
+            {
+                const File pidFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("lighthost_scan_pid.txt");
+                pidFile.deleteFile();
+                setEnv (lighthost::scan::kTestEnvVar, "spawn-child");
+                setEnv (lighthost::scan::kTestPidFileEnvVar, pidFile.getFullPathName().toRawUTF8());
+                KnownPluginList list;
+                list.setCustomScanner (std::make_unique<lighthost::scan::OutOfProcessScanner> (exe, quick));
+                OwnedArray<PluginDescription> found;
+                list.scanAndAddFile (path, false, found, *vst3);   // the worker hangs and is killed at the timeout
+                setEnv (lighthost::scan::kTestPidFileEnvVar, "");
+
+                const auto pid = (DWORD) pidFile.loadFileAsString().trim().getIntValue();
+                r.expect (pid != 0, "the worker started a helper process");
+                if (pid != 0)
+                {
+                    HANDLE helper = OpenProcess (SYNCHRONIZE, FALSE, pid);
+                    bool gone = (helper == nullptr);
+                    for (int i = 0; ! gone && i < 40; ++i)
+                    {
+                        gone = WaitForSingleObject (helper, 100) == WAIT_OBJECT_0;
+                    }
+                    if (helper != nullptr)
+                        CloseHandle (helper);
+                    r.expect (gone, "a killed worker's helper process is killed with it");
+                }
+                pidFile.deleteFile();
+            }
+           #endif
 
             setEnv (lighthost::scan::kTestEnvVar, "");
 

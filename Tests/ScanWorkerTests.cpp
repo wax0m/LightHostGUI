@@ -107,7 +107,8 @@ int runScanWorkerTests (int& checks)
 
         sc::LineBuffer whole;
         const auto all = whole.add (utf8.data(), utf8.size());
-        check (checks, all.size() == 2 && all[0] == "L <LIST/>" && all[1] == "I 1", "line buffer: one chunk gives both lines");
+        check (checks, all.size() == 2 && all[0] == sc::kLinePrefix + "L <LIST/>" && all[1] == sc::kLinePrefix + "I 1",
+               "line buffer: one chunk gives both lines");
 
         sc::LineBuffer bytes;
         std::vector<String> got;
@@ -120,6 +121,33 @@ int runScanWorkerTests (int& checks)
         check (checks, partial.add ("L <LI", 5).empty(), "line buffer: an incomplete line is held back");
         const auto rest = partial.add ("ST/>\r\n", 6);
         check (checks, rest.size() == 1 && rest[0] == "L <LIST/>", "line buffer: the line completes, CRLF is trimmed");
+    }
+
+    // C-R1: every protocol line carries the prefix; anything else on the pipe is a plugin's noise.
+    {
+        OwnedArray<PluginDescription> found;
+        found.add (new PluginDescription (describe ("Alpha", false)));
+        const auto list = sc::encodeListLine (found).trimEnd();
+        const auto done = sc::encodeInstantiatedLine (true).trimEnd();
+
+        check (checks, sc::isProtocolLine (list) && sc::isProtocolLine (done), "prefix: both worker lines are protocol lines");
+        check (checks, list.startsWith ("@LHSCAN1 L ") && done == "@LHSCAN1 I 1", "prefix: wording of the two lines");
+        check (checks, ! sc::isProtocolLine ("plugin banner") && ! sc::isProtocolLine ("L <LIST/>") && ! sc::isProtocolLine ("")
+                       && ! sc::isProtocolLine ("@LHSCAN2 L <LIST/>"),
+               "prefix: noise, an unprefixed line and another version are not protocol lines");
+        check (checks, ! sc::decodeListLine ("L <LIST/>").has_value() && ! sc::decodeInstantiatedLine ("I 1").has_value(),
+               "prefix: the old unprefixed lines are refused");
+
+        // A byte stream with noise around the real lines: only the protocol lines survive the filter.
+        const String stream = String ("banner\r\n") + list + "\nwarning: something\n" + done + "\n";
+        sc::LineBuffer buffer;
+        std::vector<String> kept;
+        const auto utf8 = stream.toStdString();
+        for (const auto& l : buffer.add (utf8.data(), utf8.size()))
+            if (sc::isProtocolLine (l))
+                kept.push_back (l);
+        check (checks, kept.size() == 2 && sc::decodeListLine (kept[0]).has_value() && sc::decodeInstantiatedLine (kept[1]) == std::optional<bool> (true),
+               "prefix: noise lines are skipped, the real ones decode");
     }
 
     // The decision table: what each way of ending means for the file.
