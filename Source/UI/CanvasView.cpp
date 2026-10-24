@@ -573,7 +573,8 @@ void CanvasView::mouseDown (const juce::MouseEvent& e)
     const auto p = e.position;
     panArmed = panning = false;
     pressedCable.reset();
-    badgeDeletedCable = false;
+    if (e.getNumberOfClicks() <= 1)
+        badgeDeletedCable = false;   // kept through the 2nd press: a double-click on the badge must not Fit
 
     // Right-click on a cable: context menu.
     if (e.mods.isPopupMenu())
