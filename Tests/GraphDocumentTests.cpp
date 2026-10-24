@@ -22,6 +22,7 @@ int runSettingsTests (int& checks);// Tests/SettingsTests.cpp
 int runVst2StateTests (int& checks);// Tests/Vst2StateTests.cpp
 int runOutputTests (int& checks);  // Tests/OutputTests.cpp
 int runScanWorkerTests (int& checks);// Tests/ScanWorkerTests.cpp
+int runModulePinTests (int& checks);// Tests/ModulePinTests.cpp
 
 static int failures = 0;
 static int checks   = 0;
@@ -324,6 +325,7 @@ int main()
     failures += runVst2StateTests (checks);
     failures += runOutputTests (checks);
     failures += runScanWorkerTests (checks);
+    failures += runModulePinTests (checks);
 
     std::cout << (failures == 0 ? "PASS " : "FAIL ")
               << (checks - failures) << '/' << checks << " checks\n";

@@ -4,6 +4,7 @@
 #include "NodeGeometry.h"
 #include "NodePlacement.h"
 #include "Vst2State.h"
+#include "ModulePin.h"
 
 GraphController::GraphController (AudioProcessorGraph& g, AudioPluginFormatManager& fm)
     : graph (g), formatManager (fm)
@@ -303,6 +304,8 @@ std::unique_ptr<AudioProcessor> GraphController::createInstanceFrom (const Plugi
         String errorMessage;
         created = formatManager.createPluginInstance (desc, graph.getSampleRate(),
                                                       graph.getBlockSize(), errorMessage);
+        if (created != nullptr)   // a plugin thread may outlive its instance: never unload a module that was used
+            lighthost::modules::pinPluginModule (File (desc.fileOrIdentifier));
     }
     if (created == nullptr)
         return nullptr;

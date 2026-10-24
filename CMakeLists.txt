@@ -67,6 +67,7 @@ target_sources(LightHost PRIVATE
     Source/Engine/PresetStore.cpp
     Source/Engine/SelfTest.cpp
     Source/Engine/PluginScanWorker.cpp
+    Source/Engine/ModulePin.cpp
     Source/UI/MainComponent.cpp
     Source/UI/NodeCard.cpp
     Source/UI/CanvasView.cpp
@@ -160,6 +161,8 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/Vst2StateTests.cpp
         Tests/OutputTests.cpp
         Tests/ScanWorkerTests.cpp
+        Tests/ModulePinTests.cpp
+        Source/Engine/ModulePin.cpp
         Source/Engine/GraphDocument.cpp
     )
 
@@ -197,6 +200,7 @@ if(LIGHTHOST_BUILD_RUNTIME_TESTS)
         Tests/GraphRuntimeTests.cpp
         Source/Engine/SelfTest.cpp
         Source/Engine/PluginScanWorker.cpp
+        Source/Engine/ModulePin.cpp
         Source/Engine/GraphDocument.cpp
         Source/Engine/GraphController.cpp
         Source/Engine/PresetStore.cpp

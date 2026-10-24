@@ -7,6 +7,7 @@
 #include "PresetStore.h"
 #include "NodeGeometry.h"
 #include "PluginScanWorker.h"
+#include "ModulePin.h"
 #include <cstdlib>
 
 using namespace juce;
@@ -2511,6 +2512,62 @@ int runSelfTest (const StringArray& explicitPluginPaths)
                 std::cout << "  HALion Sonic: " << (list.getBlacklistedFiles().contains (halion) ? "blacklisted" : "kept") << std::endl;
                 r.expect (true, "HALion Sonic through a worker did not take this process down");
             }
+        }
+    }
+
+    //==========================================================================
+    // Test Y - a module the user has used stays mapped (v1.2). A DLL that is pinned survives its last FreeLibrary;
+    //          an unpinned control DLL does not. The real path (a plugin instantiated by the controller is pinned)
+    //          is checked with a real VST3.
+    //==========================================================================
+    std::cout << "\n[Y] used plugin modules are pinned" << std::endl;
+    {
+       #if JUCE_WINDOWS
+        const File sys32 = File::getSpecialLocation (File::windowsSystemDirectory);
+        const File pinnedDll  = sys32.getChildFile ("tapi32.dll");
+        const File controlDll = sys32.getChildFile ("wsnmp32.dll");
+
+        if (pinnedDll.existsAsFile() && controlDll.existsAsFile()
+            && ! lighthost::modules::isModuleLoaded (pinnedDll) && ! lighthost::modules::isModuleLoaded (controlDll))
+        {
+            {
+                DynamicLibrary control;
+                control.open (controlDll.getFullPathName());
+                control.close();   // the last FreeLibrary
+            }
+            r.expect (! lighthost::modules::isModuleLoaded (controlDll), "control: an unpinned DLL is unloaded by its last FreeLibrary");
+
+            DynamicLibrary lib;
+            r.expect (lib.open (pinnedDll.getFullPathName()) && lighthost::modules::pinPluginModule (pinnedDll), "a loaded DLL can be pinned");
+            r.expect (! lighthost::modules::pinPluginModule (pinnedDll), "pinning the same path again does nothing");
+            lib.close();   // the last FreeLibrary
+            r.expect (lighthost::modules::isModuleLoaded (pinnedDll), "the pinned DLL is still mapped after its last FreeLibrary");
+        }
+        else
+        {
+            std::cout << "  skipped the DLL experiment (test DLLs missing or already loaded)" << std::endl;
+        }
+
+        r.expect (! lighthost::modules::pinPluginModule (File::getSpecialLocation (File::tempDirectory).getChildFile ("not_loaded_zzz.vst3")),
+                  "a path that is not loaded pins nothing and is not remembered");
+       #else
+        std::cout << "  skipped (Windows only)" << std::endl;
+       #endif
+
+        const auto pinPlugins = discoverPlugins (formatManager, explicitPluginPaths, 1);
+        if (pinPlugins.isEmpty())
+        {
+            std::cout << "  skipped the real-plugin part (no plugin)" << std::endl;
+        }
+        else
+        {
+            GraphFixture fx (formatManager, "modulepin");
+            const String uid = fx.controller->addPlugin (pinPlugins.getReference (0));
+            r.expect (uid.isNotEmpty() && ! fx.controller->isMissing (uid), "the real plugin loads");
+           #if JUCE_WINDOWS
+            r.expect (lighthost::modules::pinnedSet().contains (File (pinPlugins.getReference (0).fileOrIdentifier)),
+                      "a plugin instantiated by the controller is pinned");
+           #endif
         }
     }
 
