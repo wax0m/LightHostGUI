@@ -106,12 +106,15 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
     controller.setMonoInput (getAppProperties().getUserSettings()->getBoolValue ("monoInput", false));
     // Presets: load the store, or seed a "Default" from the just-loaded graph.
     loadPresets();
-    pinLegacyOutputs (controller.didFixOnLoad());   // stored presets (and the saved graph, if loadFrom stamped it)
 
     // A v1.0 build would read a v2 graph as px values clamped to 1 (every node bottom-right), so keep the
-    // v1 file once, before the first save can rewrite it. No dialog: the migration itself is lossless.
+    // v1 file once. It has to happen BEFORE pinLegacyOutputs below: that call saves, and a copy taken after
+    // it holds the migrated v2 graphs (and the pinned OUTs) instead of the v1 file. No dialog: the
+    // migration itself is lossless.
     if (controller.didMigrateOnLoad() || store.migratedOnLoad)
         lighthost::copySettingsFileAside (*getAppProperties().getUserSettings(), "v1");
+
+    pinLegacyOutputs (controller.didFixOnLoad());   // stored presets (and the saved graph, if loadFrom stamped it)
 
     // One non-modal notice for whatever could not be read (the backups are already written).
     const auto warning = (startupWarning + "\n\n" + controller.getLoadWarning() + "\n\n" + presetsWarning).trim();
