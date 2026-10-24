@@ -11,6 +11,7 @@
 #include "IconMenu.hpp"
 #include "PluginWindow.h"
 #include "Engine/SettingsBackup.h"
+#include "Engine/CrashedPluginRecovery.h"
 #include "UI/MainWindow.h"
 #include "Engine/PluginChoice.h"
 #if JUCE_WINDOWS
@@ -32,8 +33,11 @@ public:
             DocumentWindow::minimiseButton | DocumentWindow::closeButton),
         owner (owner_)
     {
-        const File deadMansPedalFile (getAppProperties().getUserSettings()
-            ->getFile().getSiblingFile ("RecentlyCrashedPluginsList"));
+        // JUCE's constructor below moves the pedal into the in-memory blacklist and deletes it, so
+        // anything a crash left behind has to be blacklisted and saved before that happens.
+        owner.recoverCrashedPlugins();
+
+        const File deadMansPedalFile (IconMenu::crashedPluginsPedal());
 
         setContentOwned (new PluginListComponent (pluginFormatManager,
             owner.knownPluginList,
@@ -91,6 +95,7 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
     if (savedPluginList != nullptr)
         knownPluginList.recreateFromXml (*savedPluginList);
     pluginSortMethod = KnownPluginList::sortByManufacturer;
+    recoverCrashedPlugins();   // before any scan and before the change listener: saves the blacklist itself
     knownPluginList.addChangeListener (this);
     // The device's output layout first, so the graph is built on the right pair straight away.
     controller.setOutputLayout (currentOutputLayout());
@@ -115,6 +120,45 @@ IconMenu::IconMenu (juce::String startupWarning) : INDEX_PRESET (6000000)
 
     setIcon();
     setIconTooltip (JUCEApplication::getInstance()->getApplicationName());
+}
+
+File IconMenu::crashedPluginsPedal()
+{
+    return getAppProperties().getUserSettings()->getFile().getSiblingFile ("RecentlyCrashedPluginsList");
+}
+
+// A plugin that kills the process during a scan is named by the dead man's pedal. Blacklist it, save the
+// list (before the files are deleted, so another crash cannot lose it) and tell the user without a dialog.
+void IconMenu::recoverCrashedPlugins()
+{
+    const auto pedal = crashedPluginsPedal();
+    const auto crashed = lighthost::scan::readCrashedPlugins (pedal);
+    if (crashed.isEmpty())
+    {
+        lighthost::scan::discardCrashedPluginRecords (pedal);   // BOM-only pedal and stray temp files
+        return;
+    }
+
+    const auto added = lighthost::scan::blacklistCrashedPlugins (knownPluginList, crashed);
+
+    if (auto xml = knownPluginList.createXml())
+    {
+        auto* const settings = getAppProperties().getUserSettings();
+        settings->setValue ("pluginList", xml.get());
+        if (! settings->saveIfNeeded())
+            return;   // keep the records: the next start tries again
+    }
+
+    lighthost::scan::discardCrashedPluginRecords (pedal);
+
+    const auto notice = lighthost::scan::crashedPluginsNotice (added);
+    if (notice.isEmpty())
+        return;
+
+    if (mainWindow != nullptr)
+        mainWindow->showNotice (notice);
+    else
+        startupNotice = notice;   // shown when the main window opens
 }
 
 IconMenu::~IconMenu()
@@ -650,6 +694,12 @@ void IconMenu::showMainWindow()
     #endif
     mainWindow->setVisible (true);
     mainWindow->toFront (true);
+
+    if (startupNotice.isNotEmpty())
+    {
+        mainWindow->showNotice (startupNotice);
+        startupNotice = {};
+    }
 }
 
 void IconMenu::showAddPluginMenu (juce::Point<int> screenPos)

@@ -4,6 +4,7 @@
 //
 
 #include "../Source/Engine/SettingsBackup.h"
+#include "../Source/Engine/CrashedPluginRecovery.h"
 #include <iostream>
 
 using namespace juce;
@@ -80,6 +81,49 @@ int runSettingsTests (int& checks)
         check (checks, ! lighthost::backupUnreadableSettingsFile (props).has_value(), "missing file: nullopt");
         check (checks, siblingCount (dir) == before, "missing file: no sibling created");
         check (checks, ! file.exists(), "missing file: nothing created");
+    }
+
+    // (d) crashed-plugin recovery: pedal file + leftover temp file -> blacklist, then discard
+    {
+        const auto pedal = dir.getChildFile ("RecentlyCrashedPluginsList");
+        const String a = "C:\\VST3\\Steinberg\\HALion Sonic.vst3", b = "C:\\VST3\\Other.vst3";
+
+        check (checks, lighthost::scan::readCrashedPlugins (pedal).isEmpty(), "pedal: absent file reads as empty");
+        check (checks, lighthost::scan::crashedPluginsNotice ({}).isEmpty(), "pedal: no notice for an empty list");
+
+        // JUCE's format: UTF-16 with a BOM, '\n'-separated; a BOM-only file is an empty list.
+        pedal.replaceWithText ("", true, true);
+        check (checks, lighthost::scan::readCrashedPlugins (pedal).isEmpty(), "pedal: BOM-only file is an empty list");
+
+        // The crash left only the hidden temp file (the replace never landed).
+        dir.getChildFile (".RecentlyCrashedPluginsList_temp2bafcced").replaceWithText (a, true, true);
+        auto crashed = lighthost::scan::readCrashedPlugins (pedal);
+        check (checks, crashed.size() == 1 && crashed[0] == a, "pedal: a leftover temp file is read even when the pedal is empty");
+
+        pedal.replaceWithText (b + "\n" + a + "\n\n", true, true);   // duplicate across both files, blank lines
+        crashed = lighthost::scan::readCrashedPlugins (pedal);
+        check (checks, crashed.size() == 2 && crashed.contains (a) && crashed.contains (b), "pedal: both files merged, no duplicates");
+
+        KnownPluginList list;
+        list.addToBlacklist (b);
+        const auto added = lighthost::scan::blacklistCrashedPlugins (list, crashed);
+        check (checks, added.size() == 1 && added[0] == a, "blacklist: only the newly blacklisted path is returned");
+        check (checks, list.getBlacklistedFiles().contains (a) && list.getBlacklistedFiles().contains (b), "blacklist: both paths are on the list");
+        check (checks, lighthost::scan::blacklistCrashedPlugins (list, crashed).isEmpty(), "blacklist: a second pass adds nothing");
+
+        // The blacklist survives a save / load round trip (this is what the app persists before discarding).
+        KnownPluginList reloaded;
+        if (auto xml = list.createXml())
+            reloaded.recreateFromXml (*xml);
+        check (checks, reloaded.getBlacklistedFiles().contains (a), "blacklist: HALion survives createXml / recreateFromXml");
+
+        check (checks, lighthost::scan::crashedPluginsNotice ({ a }) == "Plugin scan crashed on HALion Sonic; it will be skipped. Scan again to continue.",
+               "notice: wording and file name without extension");
+        check (checks, lighthost::scan::crashedPluginsNotice ({ a, b }).contains ("HALion Sonic, Other"), "notice: several names are joined");
+
+        lighthost::scan::discardCrashedPluginRecords (pedal);
+        check (checks, ! pedal.exists() && lighthost::scan::crashedPluginRecordFiles (pedal).isEmpty(), "discard: pedal and temp files are gone");
+        check (checks, lighthost::scan::readCrashedPlugins (pedal).isEmpty(), "discard: nothing is read afterwards");
     }
 
     dir.deleteRecursively();

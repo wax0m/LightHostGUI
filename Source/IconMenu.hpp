@@ -45,6 +45,9 @@ private:
     // Presets (scenes). The store is persisted alongside settings under "presets";
     // the active preset mirrors the live controller document.
     void loadPresets();
+    // Dead man's pedal of the plugin scan (next to the settings file) and what a crash left in it.
+    static File crashedPluginsPedal();
+    void recoverCrashedPlugins();
     // Output pairs (v1.2 B): the open device's active output channels go to the controller, and the
     // unbound OUT nodes (live document + every stored preset) are bound to its first active pair, so
     // enabling more channels later can't move the feed.
@@ -71,6 +74,7 @@ private:
     PresetStore store;
     bool isShutDown = false;
     bool deferredSavePending = false;   // one delayed save after a by-position import (see showReplacePluginMenu)
+    String startupNotice;    // one-line notice for the main window when it first opens
     String presetsWarning;   // set by loadPresets() when the saved presets were unreadable
     #if JUCE_WINDOWS
     int x, y;
