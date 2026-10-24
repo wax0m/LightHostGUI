@@ -125,6 +125,25 @@ int runPresetTests (int& checks)
         check (checks, ! PresetStore::fromXml (migrated.toXml()).migratedOnLoad, "migrated presets are not migrated again");
     }
 
+    // Remove: the active pointer follows its preset when an earlier one goes away.
+    {
+        PresetStore s;
+        for (const char* n : { "A", "B", "C", "D" })
+            s.addPreset (n, docWith (1));
+        s.setActiveIndex (2);
+        s.removePreset (0);
+        check (checks, s.getActiveIndex() == 1 && s.getPresetName (1) == "C", "removing a preset before the active one keeps it active");
+        s.removePreset (2);
+        check (checks, s.getActiveIndex() == 1 && s.getPresetName (1) == "C", "removing a preset after the active one keeps it active");
+        s.removePreset (1);
+        check (checks, s.getNumPresets() == 1 && s.getActiveIndex() == 0 && s.getPresetName (0) == "B",
+               "removing the active last preset clamps to the new last one");
+        s.duplicatePreset (0);
+        const int dup = s.duplicatePreset (1);   // a tab that is not active
+        check (checks, dup == 2 && s.getActiveIndex() == 0 && s.getPresetName (0) == "B",
+               "duplicating an inactive tab leaves the active preset alone");
+    }
+
     // Duplicate: deep copy right behind the source, unique "copy" names, the active preset stays itself.
     {
         PresetStore s;

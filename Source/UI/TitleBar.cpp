@@ -72,6 +72,11 @@ void TitleBar::paint (juce::Graphics& g)
     for (int i = 0; i < tabRects.size() && i < names.size(); ++i)
     {
         const bool isActive = (i == active);
+        if (i == menuTab)   // the tab whose context menu is open
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.06f));
+            g.fillRoundedRectangle (tabRects[i].toFloat(), 6.0f);
+        }
         g.setColour (isActive ? juce::Colour (0xfff0ebe3) : LightHostLookAndFeel::textSecond());
         g.drawText (names[i], tabRects[i], juce::Justification::centred);
         if (isActive)
@@ -146,6 +151,17 @@ void TitleBar::mouseExit (const juce::MouseEvent&)
 
 void TitleBar::mouseDown (const juce::MouseEvent& e)
 {
+    // Right click opens the menu of the tab under it and never switches presets.
+    if (e.mods.isPopupMenu())
+    {
+        for (int i = 0; i < tabRects.size(); ++i)
+            if (tabRects[i].contains (e.getPosition()))
+                return showTabMenu (i);
+        return;
+    }
+    if (! e.mods.isLeftButtonDown())
+        return;
+
     if (settingsRect.contains (e.getPosition()))
         return showSettingsMenu();
 
@@ -162,12 +178,43 @@ void TitleBar::mouseDown (const juce::MouseEvent& e)
 
 void TitleBar::mouseDoubleClick (const juce::MouseEvent& e)
 {
+    if (! e.mods.isLeftButtonDown())
+        return;
+
     for (int i = 0; i < tabRects.size(); ++i)
         if (tabRects[i].contains (e.getPosition()))
         {
             if (onRenamePreset) onRenamePreset (i);
             return;
         }
+}
+
+void TitleBar::showTabMenu (int tab)
+{
+    const bool isActive = getActivePreset && tab == getActivePreset();
+
+    juce::PopupMenu m;
+    m.addItem (1, "Save", isActive);   // saving snapshots the live graph, which is the active preset
+    m.addItem (2, juce::String::fromUTF8 ("Rename…"));
+    m.addItem (3, "Duplicate");
+    m.addSeparator();
+    m.addItem (4, "Delete");
+
+    menuTab = tab;
+    repaint();
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this)
+                        .withTargetScreenArea (localAreaToGlobal (tabRects[tab])),
+        [safe = juce::Component::SafePointer<TitleBar> (this), tab] (int r)
+        {
+            if (safe == nullptr)
+                return;
+            safe->menuTab = -1;
+            safe->repaint();
+            if      (r == 1 && safe->onSavePreset)      safe->onSavePreset();
+            else if (r == 2 && safe->onRenamePreset)    safe->onRenamePreset (tab);
+            else if (r == 3 && safe->onDuplicatePreset) safe->onDuplicatePreset (tab);
+            else if (r == 4 && safe->onDeletePreset)    safe->onDeletePreset (tab);
+        });
 }
 
 void TitleBar::showSettingsMenu()
@@ -196,7 +243,7 @@ void TitleBar::showSettingsMenu()
             else if (r == 3 && onSavePreset)  onSavePreset();
             else if (r == 4 && onRenamePreset && getActivePreset) onRenamePreset (getActivePreset());
             else if (r == 6 && onDuplicatePreset && getActivePreset) onDuplicatePreset (getActivePreset());
-            else if (r == 5 && onDeletePreset) onDeletePreset();
+            else if (r == 5 && onDeletePreset && getActivePreset) onDeletePreset (getActivePreset());
         });
 }
 

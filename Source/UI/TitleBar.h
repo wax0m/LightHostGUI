@@ -29,7 +29,7 @@ public:
     std::function<void (int)>            onRenamePreset;
     std::function<void (int)>            onDuplicatePreset;
     std::function<void()>                onSavePreset;
-    std::function<void()>                onDeletePreset;
+    std::function<void (int)>            onDeletePreset;
 
     // Live device stats (supplied by IconMenu via MainComponent). Null / <= 0 means
     // unknown — the readout shows a placeholder rather than a made-up number.
@@ -57,12 +57,14 @@ public:
 
 private:
     void showSettingsMenu();
+    void showTabMenu (int tab);   // right click on a preset tab
     juce::StringArray presetNames() const;
 
     juce::Array<juce::Rectangle<int>> tabRects;
     juce::Rectangle<int> plusRect;
     juce::Rectangle<int> settingsRect;
     bool settingsHot = false;
+    int menuTab = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TitleBar)
 };

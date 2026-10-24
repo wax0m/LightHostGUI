@@ -429,11 +429,28 @@ void IconMenu::saveActivePreset()
     settings.saveIfNeeded();
 }
 
-void IconMenu::deleteActivePreset()
+void IconMenu::deletePreset (int index)
 {
-    const int active = store.getActiveIndex();
-    if (active < 0)
+    if (index < 0 || index >= store.getNumPresets())
         return;
+
+    // Fold the live graph into the active preset before the indices move.
+    const int active = store.getActiveIndex();
+    if (active >= 0)
+        store.setPresetDocument (active, controller.snapshotDocument());
+
+    auto& settings = *getAppProperties().getUserSettings();
+
+    if (index != active)
+    {
+        // Another tab: the live graph stays as it is; the store keeps pointing at the same active preset.
+        store.removePreset (index);
+        settings.setValue ("presets", store.toXml());
+        settings.saveIfNeeded();
+        if (mainWindow != nullptr)
+            mainWindow->refreshPresets();
+        return;
+    }
 
     store.removePreset (active);
     if (store.getNumPresets() == 0)   // never leave 0 presets
@@ -445,7 +462,6 @@ void IconMenu::deleteActivePreset()
     const int newActive = store.getActiveIndex();
     controller.loadDocument (store.getPresetDocument (newActive));
 
-    auto& settings = *getAppProperties().getUserSettings();
     controller.save (settings);
     settings.setValue ("presets", store.toXml());
     settings.saveIfNeeded();
@@ -807,7 +823,7 @@ void IconMenu::showMainWindow()
         cb.renamePreset = [this] (int i) { renamePreset (i); };
         cb.duplicatePreset = [this] (int i) { duplicatePreset (i); };
         cb.savePreset   = [this] { saveActivePreset(); };
-        cb.deletePreset = [this] { deleteActivePreset(); };
+        cb.deletePreset = [this] (int i) { deletePreset (i); };
         cb.sampleRate   = [this]
         {
             auto* d = deviceManager.getCurrentAudioDevice();

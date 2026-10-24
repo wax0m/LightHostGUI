@@ -152,6 +152,9 @@ void PresetStore::removePreset (int index)
 {
     if (index < 0 || index >= getNumPresets())
         return;
+    const int active = getActiveIndex();
     state.removeChild (index, nullptr);
-    setActiveIndex ((int) state.getProperty (idActive, 0));   // re-clamp
+    // A preset removed before the active one shifts it down; removing the active one hands the slot to
+    // its successor (clamped at the end).
+    setActiveIndex (index < active ? active - 1 : active);
 }
