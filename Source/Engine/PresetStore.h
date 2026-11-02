@@ -15,6 +15,7 @@
 
 #include <JuceHeader.h>
 #include "GraphDocument.h"
+#include "HotkeyCombo.h"
 
 class PresetStore
 {
@@ -51,6 +52,16 @@ public:
     int duplicatePreset (int index);
     // Stamp the unbound OUT nodes of EVERY stored preset (see GraphDocument::pinLegacyOutputs).
     bool pinLegacyOutputs (int outCh, const juce::String& label, const juce::String& device);
+
+    // Global shortcut of a preset (attribute `shortcut` on its PRESET, so it follows the preset through renames and
+    // moves). Canonical text ("Ctrl+Alt+1"), "" = none; an unreadable stored value counts as none.
+    juce::String getPresetShortcut (int index) const;
+    // Binds `combo` to the preset. One combination belongs to at most one preset: a previous owner loses it and its
+    // index is returned (-1 when the combination was free or `index` is invalid).
+    int  setPresetShortcut (int index, const lighthost::hotkeys::Combo& combo);
+    void clearPresetShortcut (int index);
+    int  findPresetByShortcut (const lighthost::hotkeys::Combo& combo) const;   // -1 when none
+    juce::StringArray registeredShortcuts() const;                               // distinct canonical texts
 
     bool migratedOnLoad = false;   // set by fromXml when any preset's graph was a v1 tree
 

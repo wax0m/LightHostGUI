@@ -151,14 +151,32 @@ void TitleBar::repaintStats()
     repaint (statsClusterBounds());
 }
 
+int TitleBar::tabAt (juce::Point<int> p) const
+{
+    for (int i = 0; i < tabRects.size(); ++i)
+        if (tabRects[i].contains (p))
+            return i;
+    return -1;
+}
+
+juce::String TitleBar::getTooltip()
+{
+    if (hoverTab < 0 || ! getPresetShortcut || ! (shortcutsAvailable && shortcutsAvailable()))
+        return {};
+    const auto text = getPresetShortcut (hoverTab);
+    return text.isEmpty() ? juce::String() : "Shortcut: " + text;
+}
+
 void TitleBar::mouseMove (const juce::MouseEvent& e)
 {
+    hoverTab = tabAt (e.getPosition());
     const bool hot = settingsRect.contains (e.getPosition());
     if (hot != settingsHot) { settingsHot = hot; repaint(); }
 }
 
 void TitleBar::mouseExit (const juce::MouseEvent&)
 {
+    hoverTab = -1;
     if (settingsHot) { settingsHot = false; repaint(); }
 }
 
@@ -264,6 +282,16 @@ void TitleBar::showTabMenu (int tab)
     m.addSeparator();
     m.addItem (5, "Move Left", tab > 0);
     m.addItem (6, "Move Right", tab < tabRects.size() - 1);
+    if (shortcutsAvailable && shortcutsAvailable())
+    {
+        const auto current = getPresetShortcut ? getPresetShortcut (tab) : juce::String();
+        m.addSeparator();
+        juce::PopupMenu::Item set (juce::String::fromUTF8 ("Set Shortcut…"));
+        set.itemID = 7;
+        set.shortcutKeyDescription = current;   // shown right-aligned in the menu
+        m.addItem (set);
+        m.addItem (8, "Clear Shortcut", current.isNotEmpty());
+    }
     m.addSeparator();
     m.addItem (4, "Delete");
 
@@ -283,6 +311,8 @@ void TitleBar::showTabMenu (int tab)
             else if (r == 4 && safe->onDeletePreset)    safe->onDeletePreset (tab);
             else if (r == 5 && safe->onMovePreset)      safe->onMovePreset (tab, tab - 1);
             else if (r == 6 && safe->onMovePreset)      safe->onMovePreset (tab, tab + 1);
+            else if (r == 7 && safe->onSetShortcut)     safe->onSetShortcut (tab);
+            else if (r == 8 && safe->onClearShortcut)   safe->onClearShortcut (tab);
         });
 }
 

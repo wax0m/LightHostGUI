@@ -17,6 +17,7 @@
 #include "UI/MainWindow.h"
 #include "Engine/PluginChoice.h"
 #include "Autostart.h"
+#include "UI/ShortcutCapture.h"
 #if JUCE_WINDOWS
 #include "Windows.h"
 #endif
@@ -79,8 +80,31 @@ private:
     IconMenu& owner;
 };
 
+// "-multi-instance=<name>" copies share the machine with the main one: no Start with Windows, no global shortcuts.
+static bool runsAsMultiInstance()
+{
+    for (const auto& arg : JUCEApplication::getInstance()->getCommandLineParameterArray())
+        if (arg.startsWith ("-multi-instance"))
+            return true;
+    return false;
+}
+
+namespace
+{
+    // Marks "a preset document is being loaded" for the lifetime of the scope.
+    struct BusyScope
+    {
+        explicit BusyScope (bool& f) : flag (f) { flag = true; }
+        ~BusyScope() { flag = false; }
+        bool& flag;
+    };
+}
+
 IconMenu::IconMenu (juce::String startupWarning, bool safeMode) : INDEX_PRESET (6000000)
 {
+    #if JUCE_WINDOWS
+    shortcutsAllowed = ! safeMode && ! runsAsMultiInstance();
+    #endif
     // Initialization
     addDefaultFormatsToManager (formatManager);   // JUCE 8: replaces AudioPluginFormatManager::addDefaultFormats()
     // Every plugin file is scanned in a child process of its own; a crash there blacklists that file only.
@@ -129,6 +153,7 @@ IconMenu::IconMenu (juce::String startupWarning, bool safeMode) : INDEX_PRESET (
         lighthost::copySettingsFileAside (*getAppProperties().getUserSettings(), "v1");
 
     pinLegacyOutputs (controller.didFixOnLoad());   // stored presets (and the saved graph, if loadFrom stamped it)
+    syncHotkeys();
 
     // One non-modal notice for whatever could not be read (the backups are already written).
     const auto warning = (startupWarning + "\n\n" + controller.getLoadWarning() + "\n\n" + presetsWarning).trim();
@@ -275,6 +300,10 @@ void IconMenu::shutdownCleanly()
         return;
     isShutDown = true;
     midiListConnection.reset();
+    hotkeys.reset();   // unregisters every shortcut and destroys its window first
+    if (shortcutDialog != nullptr)
+        shortcutDialog->exitModalState (0);
+    shortcutDialog = nullptr;
 
     // UI stops polling the controller before anything below is torn down.
     stopTimer();
@@ -340,6 +369,10 @@ void IconMenu::switchToPreset (int index)
     if (index < 0 || index >= store.getNumPresets() || index == store.getActiveIndex())
         return;
 
+    if (presetLoadBusy)
+        return;   // re-entered from a nested message loop while a document loads
+    const BusyScope busy (presetLoadBusy);
+
     auto& settings = *getAppProperties().getUserSettings();
     if (const int active = store.getActiveIndex(); active >= 0)
         store.setPresetDocument (active, controller.snapshotDocument());   // save current
@@ -361,8 +394,9 @@ void IconMenu::switchToPreset (int index)
 void IconMenu::addPreset()
 {
     const String name = promptForName ("New Preset", "Preset " + String (store.getNumPresets() + 1));
-    if (name.isEmpty())
+    if (name.isEmpty() || presetLoadBusy)
         return;
+    const BusyScope busy (presetLoadBusy);
 
     // Snapshot the current scene, then add an EMPTY preset (IN -> OUT) and load it like a preset switch.
     if (const int active = store.getActiveIndex(); active >= 0)
@@ -438,8 +472,9 @@ void IconMenu::saveActivePreset()
 
 void IconMenu::deletePreset (int index)
 {
-    if (index < 0 || index >= store.getNumPresets())
+    if (index < 0 || index >= store.getNumPresets() || presetLoadBusy)
         return;
+    const BusyScope busy (presetLoadBusy);
 
     // Fold the live graph into the active preset before the indices move.
     const int active = store.getActiveIndex();
@@ -454,6 +489,7 @@ void IconMenu::deletePreset (int index)
         store.removePreset (index);
         settings.setValue ("presets", store.toXml());
         settings.saveIfNeeded();
+        syncHotkeys();
         if (mainWindow != nullptr)
             mainWindow->refreshPresets();
         return;
@@ -472,6 +508,7 @@ void IconMenu::deletePreset (int index)
     controller.save (settings);
     settings.setValue ("presets", store.toXml());
     settings.saveIfNeeded();
+    syncHotkeys();
 
     if (mainWindow != nullptr)
     {
@@ -495,6 +532,97 @@ void IconMenu::movePreset (int from, int to)
     settings.setValue ("presets", store.toXml());
     settings.saveIfNeeded();
 
+    if (mainWindow != nullptr)
+        mainWindow->refreshPresets();
+}
+
+//== Global preset shortcuts ===================================================
+// Registers the stored combinations (replacing any earlier registration). Nothing is created while no preset has a
+// shortcut. A combination another app holds stays bound to its preset and is reported without a dialog.
+void IconMenu::syncHotkeys()
+{
+    if (! shortcutsAllowed || isShutDown)
+        return;
+
+    const auto combos = store.registeredShortcuts();
+    if (hotkeys == nullptr)
+    {
+        if (combos.isEmpty())
+            return;
+        hotkeys = std::make_unique<PresetHotkeys>();
+        hotkeys->onPressed = [this] (const String& combo) { handlePresetHotkey (combo); };
+    }
+
+    for (const auto& failed : hotkeys->sync (combos))
+        postNotice ("Shortcut " + failed + " is used by another app");
+}
+
+// A press arrives here through the message queue, never from inside the window procedure. It is dropped while a
+// document is loading (a plugin dialog can run a nested message loop that delivers it) and while a modal
+// component (rename prompt, shortcut capture) is open.
+void IconMenu::handlePresetHotkey (const String& combo)
+{
+    if (isShutDown || presetLoadBusy || Component::getCurrentlyModalComponent() != nullptr)
+        return;
+
+    if (const auto parsed = lighthost::hotkeys::parse (combo); parsed.has_value())
+        if (const int index = store.findPresetByShortcut (*parsed); index >= 0)
+            switchToPreset (index);
+}
+
+void IconMenu::setPresetShortcut (int index)
+{
+    if (! shortcutsAllowed || shortcutDialog != nullptr || index < 0 || index >= store.getNumPresets())
+        return;
+
+    // Our own hotkeys would swallow the very keystroke being captured.
+    if (hotkeys != nullptr)
+        hotkeys->sync ({});
+
+    shortcutDialog = std::make_unique<lighthost::ui::ShortcutCaptureWindow> (
+        store.getPresetName (index), store.getPresetShortcut (index),
+        [this, index] (std::optional<lighthost::hotkeys::Combo> result) { finishShortcutCapture (index, std::move (result)); });
+}
+
+// Every way out of the dialog (OK, Esc, Cancel, the close button) ends up here and re-registers the hotkeys.
+void IconMenu::finishShortcutCapture (int index, std::optional<lighthost::hotkeys::Combo> result)
+{
+    if (shortcutDialog != nullptr)
+        shortcutDialog->exitModalState (0);
+
+    if (result.has_value() && index >= 0 && index < store.getNumPresets())
+    {
+        const int previous = store.setPresetShortcut (index, *result);
+        if (previous >= 0)
+            postNotice ("Shortcut " + lighthost::hotkeys::format (*result) + " moved from \"" + store.getPresetName (previous) + "\"");
+
+        auto& settings = *getAppProperties().getUserSettings();
+        settings.setValue ("presets", store.toXml());
+        settings.saveIfNeeded();
+        if (mainWindow != nullptr)
+            mainWindow->refreshPresets();
+    }
+
+    syncHotkeys();   // always: the capture turned every shortcut off
+
+    // The dialog is inside its own callback: delete it from the queue.
+    MessageManager::callAsync ([this]
+    {
+        if (! isShutDown)
+            shortcutDialog = nullptr;
+    });
+}
+
+void IconMenu::clearPresetShortcut (int index)
+{
+    if (index < 0 || index >= store.getNumPresets())
+        return;
+
+    store.clearPresetShortcut (index);
+    auto& settings = *getAppProperties().getUserSettings();
+    settings.setValue ("presets", store.toXml());
+    settings.saveIfNeeded();
+    syncHotkeys();
     if (mainWindow != nullptr)
         mainWindow->refreshPresets();
 }
@@ -605,10 +733,7 @@ void IconMenu::timerCallback()
         menu.addItem (kMonoInputMenuId, "Mono Input", true, controller.isMonoInput());
         #if JUCE_WINDOWS
         // Not offered to -multi-instance copies: they would fight over the single Run value.
-        bool multiInstance = false;   // the option is "-multi-instance=<name>"
-        for (const auto& arg : JUCEApplication::getInstance()->getCommandLineParameterArray())
-            multiInstance = multiInstance || arg.startsWith ("-multi-instance");
-        if (! multiInstance)
+        if (! runsAsMultiInstance())
         {
             const auto autostart = lighthost::autostart::read();   // read only when the menu is built
             menu.addItem (kStartWithWindowsMenuId,
@@ -888,6 +1013,9 @@ void IconMenu::showMainWindow()
         cb.savePreset   = [this] { saveActivePreset(); };
         cb.deletePreset = [this] (int i) { deletePreset (i); };
         cb.movePreset   = [this] (int from, int to) { movePreset (from, to); };
+        cb.shortcutsAvailable = [this] { return shortcutsAllowed; };
+        cb.setShortcut  = [this] (int i) { setPresetShortcut (i); };
+        cb.clearShortcut = [this] (int i) { clearPresetShortcut (i); };
         cb.sampleRate   = [this]
         {
             auto* d = deviceManager.getCurrentAudioDevice();

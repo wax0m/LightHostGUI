@@ -12,8 +12,9 @@
 #include <JuceHeader.h>
 #include "Engine/GraphController.h"
 #include "Engine/PresetStore.h"
+#include "PresetHotkeys.h"
 
-namespace lighthost::ui { class MainWindow; }
+namespace lighthost::ui { class MainWindow; class ShortcutCaptureWindow; }
 
 ApplicationProperties& getAppProperties();
 
@@ -69,6 +70,13 @@ private:
     void saveActivePreset();
     void deletePreset (int index);
     void movePreset (int from, int to);
+    // Global preset shortcuts (Windows; off in -multi-instance and safe mode). The registration object exists only
+    // while a shortcut is bound.
+    void syncHotkeys();                     // registers the stored combinations, notices for the ones another app holds
+    void handlePresetHotkey (const String& combo);
+    void setPresetShortcut (int index);     // capture dialog
+    void finishShortcutCapture (int index, std::optional<lighthost::hotkeys::Combo> result);
+    void clearPresetShortcut (int index);
     String promptForName (const String& title, const String& initial);
 
     AudioDeviceManager deviceManager;
@@ -81,6 +89,10 @@ private:
     AudioProcessorPlayer player;
     GraphController controller { graph, formatManager };
     PresetStore store;
+    bool shortcutsAllowed = false;
+    bool presetLoadBusy = false;        // a preset document is being loaded; a hotkey press meanwhile is ignored
+    std::unique_ptr<PresetHotkeys> hotkeys;
+    std::unique_ptr<lighthost::ui::ShortcutCaptureWindow> shortcutDialog;
     bool isShutDown = false;
     bool deferredSavePending = false;   // one delayed save after a by-position import (see showReplacePluginMenu)
     MidiDeviceListConnection midiListConnection;

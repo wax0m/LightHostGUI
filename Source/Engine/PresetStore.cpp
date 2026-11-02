@@ -10,6 +10,7 @@ namespace
     const Identifier idActive  ("active");
     const Identifier idVersion ("version");
     const Identifier idGraph   ("GRAPH");
+    const Identifier idShortcut ("shortcut");
 }
 
 PresetStore::PresetStore()
@@ -152,6 +153,7 @@ int PresetStore::duplicatePreset (int index)
     const int active = getActiveIndex();
     ValueTree copy = state.getChild (index).createCopy();   // deep copy, graph included
     copy.setProperty (idName, uniqueCopyName (getPresetName (index)), nullptr);
+    copy.removeProperty (idShortcut, nullptr);   // a combination belongs to one preset only
     state.addChild (copy, index + 1, nullptr);
     if (active > index)
         state.setProperty (idActive, active + 1, nullptr);   // keep pointing at the same preset
@@ -183,4 +185,47 @@ bool PresetStore::movePreset (int from, int to)
     else if (to <= active && active < from)    newActive = active + 1;
     state.setProperty (idActive, newActive, nullptr);
     return true;
+}
+
+String PresetStore::getPresetShortcut (int index) const
+{
+    if (const auto c = lighthost::hotkeys::parse (state.getChild (index).getProperty (idShortcut).toString()); c.has_value())
+        return lighthost::hotkeys::format (*c);
+    return {};
+}
+
+int PresetStore::setPresetShortcut (int index, const lighthost::hotkeys::Combo& combo)
+{
+    auto preset = state.getChild (index);
+    if (! preset.isValid() || ! combo.hasModifier() || combo.key.isEmpty())
+        return -1;
+
+    const int previous = findPresetByShortcut (combo);
+    if (previous >= 0 && previous != index)
+        state.getChild (previous).removeProperty (idShortcut, nullptr);
+    preset.setProperty (idShortcut, lighthost::hotkeys::format (combo), nullptr);
+    return previous != index ? previous : -1;
+}
+
+void PresetStore::clearPresetShortcut (int index)
+{
+    if (auto preset = state.getChild (index); preset.isValid())
+        preset.removeProperty (idShortcut, nullptr);
+}
+
+int PresetStore::findPresetByShortcut (const lighthost::hotkeys::Combo& combo) const
+{
+    StringArray all;
+    for (int i = 0; i < getNumPresets(); ++i)
+        all.add (getPresetShortcut (i));
+    return lighthost::hotkeys::findOwner (all, combo);
+}
+
+StringArray PresetStore::registeredShortcuts() const
+{
+    StringArray out;
+    for (int i = 0; i < getNumPresets(); ++i)
+        if (const auto s = getPresetShortcut (i); s.isNotEmpty())
+            out.addIfNotAlreadyThere (s);
+    return out;
 }

@@ -22,6 +22,10 @@ MainComponent::MainComponent (GraphController& controllerToPoll, const PresetSto
     titleBar.onSavePreset    = [this] { if (callbacks.savePreset) callbacks.savePreset(); };
     titleBar.onDeletePreset  = [this] (int i) { if (callbacks.deletePreset) callbacks.deletePreset (i); };
     titleBar.onMovePreset    = [this] (int from, int to) { if (callbacks.movePreset) callbacks.movePreset (from, to); };
+    titleBar.shortcutsAvailable = [this] { return callbacks.shortcutsAvailable && callbacks.shortcutsAvailable(); };
+    titleBar.getPresetShortcut  = [this] (int i) { return presetStore.getPresetShortcut (i); };
+    titleBar.onSetShortcut   = [this] (int i) { if (callbacks.setShortcut) callbacks.setShortcut (i); };
+    titleBar.onClearShortcut = [this] (int i) { if (callbacks.clearShortcut) callbacks.clearShortcut (i); };
     titleBar.getSampleRate   = callbacks.sampleRate;
     titleBar.getCpuLoad      = callbacks.cpuLoad;
     titleBar.refreshPresets();
