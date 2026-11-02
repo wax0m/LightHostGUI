@@ -133,6 +133,9 @@ void CanvasView::rebuildViews()
     cards.clear();
     outNodes.clear();
     views.clear();
+    dragUid = {};   // a drag cut short by a rebuild must not leave a stale raw position or guides
+    guideX.reset();
+    guideY.reset();
 
     inNode.uid = controller.document.getIoNodeUid (true);
 
