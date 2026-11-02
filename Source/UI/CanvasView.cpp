@@ -324,11 +324,31 @@ void CanvasView::moveNodeBy (const juce::String& uid, juce::Point<int> delta)
     if (const auto* v = viewForUid (uid))
     {
         auto* c = v->comp;
+        if (dragUid != uid)   // first move of this drag
+        {
+            dragUid    = uid;
+            rawTopLeft = c->getPosition().toFloat();
+        }
+
         // Top-left stays on the canvas and the centre within the document's coordinate range.
         const int maxCoord = (int) lighthost::geometry::kMaxCoord;
-        const int x = juce::jlimit (0, maxCoord - c->getWidth()  / 2, c->getX() + delta.x);
-        const int y = juce::jlimit (0, maxCoord - c->getHeight() / 2, c->getY() + delta.y);
+        const int maxX = maxCoord - c->getWidth()  / 2;
+        const int maxY = maxCoord - c->getHeight() / 2;
+        rawTopLeft = { juce::jlimit (0.0f, (float) maxX, rawTopLeft.x + (float) delta.x),
+                       juce::jlimit (0.0f, (float) maxY, rawTopLeft.y + (float) delta.y) };
+
+        std::vector<juce::Rectangle<float>> others;
+        for (const auto& o : views)
+            if (o.uid != uid)
+                others.push_back (o.comp->getBounds().toFloat());
+        const auto snapped = lighthost::ui::snap::computeSnap (
+            c->getLocalBounds().toFloat().withPosition (rawTopLeft), others, zoom, juce::ModifierKeys::getCurrentModifiersRealtime().isAltDown());
+
+        const int x = juce::jlimit (0, maxX, juce::roundToInt (rawTopLeft.x + snapped.offset.x));
+        const int y = juce::jlimit (0, maxY, juce::roundToInt (rawTopLeft.y + snapped.offset.y));
         c->setTopLeftPosition (x, y);
+        guideX = snapped.guideX;
+        guideY = snapped.guideY;
 
         // Past the right / bottom edge the canvas grows live (it only shrinks again on drop). The
         // document still holds the old position until then, so resized() must not re-place nodes.
@@ -345,6 +365,13 @@ void CanvasView::moveNodeBy (const juce::String& uid, juce::Point<int> delta)
 
 void CanvasView::persistNodePosition (const juce::String& uid)
 {
+    const bool hadGuide = guideX.has_value() || guideY.has_value();
+    dragUid = {};
+    guideX.reset();
+    guideY.reset();
+    if (hadGuide)
+        repaint();
+
     if (const auto* v = viewForUid (uid))
     {
         const auto centre = v->comp->getBounds().getCentre();
@@ -782,6 +809,18 @@ void CanvasView::resized()
 }
 
 //== Paint =====================================================================
+void CanvasView::paintOverChildren (juce::Graphics& g)
+{
+    if (! guideX.has_value() && ! guideY.has_value())
+        return;   // only while a drag is snapped
+
+    g.setColour (LightHostLookAndFeel::accent().withAlpha (0.4f));
+    if (guideX.has_value())
+        g.fillRect (juce::Rectangle<float> (*guideX - 0.5f, 0.0f, 1.0f, (float) getHeight()));
+    if (guideY.has_value())
+        g.fillRect (juce::Rectangle<float> (0.0f, *guideY - 0.5f, (float) getWidth(), 1.0f));
+}
+
 void CanvasView::paint (juce::Graphics& g)
 {
     juce::ColourGradient bg (LightHostLookAndFeel::appBgTop(), (float) getWidth() * 0.5f, -40.0f,

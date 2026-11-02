@@ -25,6 +25,7 @@
 #include "../Engine/GraphController.h"
 #include "LightHostLookAndFeel.h"
 #include "NodeCard.h"
+#include "SnapGuides.h"
 
 namespace lighthost::ui
 {
@@ -93,6 +94,7 @@ public:
     juce::Rectangle<int> getContentBounds() const;
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;   // snap guides, above the cards
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
@@ -176,6 +178,12 @@ private:
     // Viewport size in pixels (set by the host).
     int viewportW = 0;
     int viewportH = 0;
+
+    // Node drag with snapping: the UNSNAPPED top-left accumulates the mouse deltas (snapping the already snapped
+    // position would make a card stick); the guides drawn while a snap is active.
+    juce::String dragUid;
+    juce::Point<float> rawTopLeft;
+    std::optional<float> guideX, guideY;
 
     bool suppressPlacement = false;   // a live drag grows the canvas without re-placing nodes from the document
 

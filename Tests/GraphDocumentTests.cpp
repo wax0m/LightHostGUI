@@ -24,6 +24,7 @@ int runOutputTests (int& checks);  // Tests/OutputTests.cpp
 int runScanWorkerTests (int& checks);// Tests/ScanWorkerTests.cpp
 int runModulePinTests (int& checks);// Tests/ModulePinTests.cpp
 int runMidiInputPlanTests (int& checks);// Tests/MidiInputPlanTests.cpp
+int runSnapGuidesTests (int& checks);// Tests/SnapGuidesTests.cpp
 
 static int failures = 0;
 static int checks   = 0;
@@ -328,6 +329,7 @@ int main()
     failures += runScanWorkerTests (checks);
     failures += runModulePinTests (checks);
     failures += runMidiInputPlanTests (checks);
+    failures += runSnapGuidesTests (checks);
 
     std::cout << (failures == 0 ? "PASS " : "FAIL ")
               << (checks - failures) << '/' << checks << " checks\n";
