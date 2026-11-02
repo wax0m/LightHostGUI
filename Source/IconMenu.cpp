@@ -16,6 +16,7 @@
 #include "Engine/MidiInputPlan.h"
 #include "UI/MainWindow.h"
 #include "Engine/PluginChoice.h"
+#include "Autostart.h"
 #if JUCE_WINDOWS
 #include "Windows.h"
 #endif
@@ -26,6 +27,7 @@
 static constexpr int kShowWindowMenuId = 3;
 static constexpr int kMonoInputMenuId  = 6;   // checkable "Mono Input" toggle
 static constexpr int kRetryMissingMenuId = 7; // "Retry missing plugins (N)", shown only when N > 0
+static constexpr int kStartWithWindowsMenuId = 8; // checkable "Start with Windows" (Windows, not in -multi-instance)
 
 class IconMenu::PluginListWindow : public DocumentWindow
 {
@@ -577,6 +579,16 @@ void IconMenu::timerCallback()
         menu.addItem (2, "Edit Plugins");
         menu.addItem (kShowWindowMenuId, "Show Editor Window");
         menu.addItem (kMonoInputMenuId, "Mono Input", true, controller.isMonoInput());
+        #if JUCE_WINDOWS
+        // Not offered to -multi-instance copies: they would fight over the single Run value.
+        if (! JUCEApplication::getInstance()->getCommandLineParameterArray().contains ("-multi-instance"))
+        {
+            const auto autostart = lighthost::autostart::read();   // read only when the menu is built
+            menu.addItem (kStartWithWindowsMenuId,
+                          autostart == lighthost::autostart::State::otherExe ? "Start with Windows (other copy)" : "Start with Windows",
+                          true, autostart != lighthost::autostart::State::off);
+        }
+        #endif
         // Presets switcher — change the active scene from the background.
         {
             PopupMenu presets;
@@ -762,6 +774,16 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
         settings.saveIfNeeded();
         return im->startTimer (50);
     }
+    #if JUCE_WINDOWS
+    // Off or pointing at another copy -> point it at this exe; pointing at this exe -> remove it.
+    if (id == kStartWithWindowsMenuId)
+    {
+        const bool remove = lighthost::autostart::read() == lighthost::autostart::State::thisExe;
+        if (! (remove ? lighthost::autostart::disable() : lighthost::autostart::enableForThisExe()))
+            im->postNotice ("Could not change the Start with Windows setting.");
+        return;
+    }
+    #endif
     // Retry plugins that failed to load. The document is unchanged (their saved
     // state was kept), so there is nothing to save; just rebuild the cards.
     if (id == kRetryMissingMenuId)

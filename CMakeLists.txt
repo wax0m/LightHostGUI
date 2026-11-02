@@ -61,6 +61,7 @@ juce_generate_juce_header(LightHost)
 target_sources(LightHost PRIVATE
     Source/HostStartup.cpp
     Source/IconMenu.cpp
+    Source/Autostart.cpp
     Source/PluginWindow.cpp
     Source/Engine/GraphDocument.cpp
     Source/Engine/GraphController.cpp
@@ -164,6 +165,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/ModulePinTests.cpp
         Tests/MidiInputPlanTests.cpp
         Tests/SnapGuidesTests.cpp
+        Tests/AutostartTests.cpp
         Source/Engine/ModulePin.cpp
         Source/Engine/GraphDocument.cpp
     )
