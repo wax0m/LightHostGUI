@@ -581,7 +581,10 @@ void IconMenu::timerCallback()
         menu.addItem (kMonoInputMenuId, "Mono Input", true, controller.isMonoInput());
         #if JUCE_WINDOWS
         // Not offered to -multi-instance copies: they would fight over the single Run value.
-        if (! JUCEApplication::getInstance()->getCommandLineParameterArray().contains ("-multi-instance"))
+        bool multiInstance = false;   // the option is "-multi-instance=<name>"
+        for (const auto& arg : JUCEApplication::getInstance()->getCommandLineParameterArray())
+            multiInstance = multiInstance || arg.startsWith ("-multi-instance");
+        if (! multiInstance)
         {
             const auto autostart = lighthost::autostart::read();   // read only when the menu is built
             menu.addItem (kStartWithWindowsMenuId,
