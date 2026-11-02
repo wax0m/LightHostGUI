@@ -40,6 +40,16 @@ PresetStore PresetStore::fromXml (const String& xml)
     return s;
 }
 
+GraphDocument PresetStore::emptyPresetDocument()
+{
+    GraphDocument doc;   // audioIn + main audioOut
+    const auto in  = doc.getIoNodeUid (true);
+    const auto out = doc.getIoNodeUid (false);
+    doc.addConnection (in, 0, out, 0);
+    doc.addConnection (in, 1, out, 1);
+    return doc;
+}
+
 String PresetStore::toXml() const
 {
     if (auto xml = state.createXml())

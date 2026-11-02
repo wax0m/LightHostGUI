@@ -364,18 +364,23 @@ void IconMenu::addPreset()
     if (name.isEmpty())
         return;
 
-    // Snapshot the current scene, then add a copy of it as a new active preset.
+    // Snapshot the current scene, then add an EMPTY preset (IN -> OUT) and load it like a preset switch.
     if (const int active = store.getActiveIndex(); active >= 0)
         store.setPresetDocument (active, controller.snapshotDocument());
-    const int idx = store.addPreset (name, controller.snapshotDocument());
-    store.setActiveIndex (idx);   // live doc already equals the new preset — no reload
+    const int idx = store.addPreset (name, PresetStore::emptyPresetDocument());
+    store.setActiveIndex (idx);
+    controller.loadDocument (store.getPresetDocument (idx));   // repairs / pins the OUT like any stored preset
 
     auto& settings = *getAppProperties().getUserSettings();
+    controller.save (settings);
     settings.setValue ("presets", store.toXml());
     settings.saveIfNeeded();
 
     if (mainWindow != nullptr)
+    {
+        mainWindow->refreshChain();
         mainWindow->refreshPresets();
+    }
 }
 
 void IconMenu::duplicatePreset (int index)

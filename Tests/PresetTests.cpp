@@ -180,5 +180,29 @@ int runPresetTests (int& checks)
                "copies survive the XML round-trip in order");
     }
 
+    // New Preset: an empty IN -> OUT document; Duplicate still copies.
+    {
+        PresetStore s;
+        s.addPreset ("A", docWith (2));
+        const auto empty = PresetStore::emptyPresetDocument();
+        check (checks, empty.isValid(), "empty preset: document is valid");
+        check (checks, empty.getNodes().getNumChildren() == 2, "empty preset: only IN and OUT");
+        check (checks, empty.getConnections().getNumChildren() == 2, "empty preset: two connections (a stereo pair)");
+        const auto in = empty.getIoNodeUid (true), out = empty.getIoNodeUid (false);
+        check (checks, empty.hasConnection (in, 0, out, 0) && empty.hasConnection (in, 1, out, 1),
+               "empty preset: IN feeds the main OUT on both channels");
+        bool anyPlugin = false;
+        for (auto n : empty.getNodes())
+            anyPlugin = anyPlugin || n.getProperty ("type").toString() == "plugin";
+        check (checks, ! anyPlugin, "empty preset: no plugin node");
+
+        const int idx = s.addPreset ("New", empty);
+        check (checks, s.getPresetDocument (idx).getNodes().getNumChildren() == 2
+                    && s.getPresetDocument (0).getNodes().getNumChildren() == 4,
+               "adding the empty preset leaves the others alone");
+        const int dup = s.duplicatePreset (0);
+        check (checks, s.getPresetDocument (dup).getNodes().getNumChildren() == 4, "duplicate still copies the plugins");
+    }
+
     return failures;
 }

@@ -22,6 +22,8 @@ public:
     PresetStore();                                        // empty; active = -1
 
     static PresetStore fromXml (const juce::String& xml); // check isValid()
+    // What "+" adds: just IN and the main OUT, joined by a stereo pair (the input goes straight to the output).
+    static GraphDocument emptyPresetDocument();
     juce::String toXml() const;
     bool isValid() const;
 
