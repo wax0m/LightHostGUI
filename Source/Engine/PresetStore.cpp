@@ -168,3 +168,19 @@ void PresetStore::removePreset (int index)
     // its successor (clamped at the end).
     setActiveIndex (index < active ? active - 1 : active);
 }
+
+bool PresetStore::movePreset (int from, int to)
+{
+    const int n = getNumPresets();
+    if (from < 0 || from >= n || to < 0 || to >= n || from == to)
+        return false;
+
+    const int active = getActiveIndex();
+    state.moveChild (from, to, nullptr);
+    int newActive = active;
+    if (active == from)                        newActive = to;
+    else if (from < active && active <= to)    newActive = active - 1;
+    else if (to <= active && active < from)    newActive = active + 1;
+    state.setProperty (idActive, newActive, nullptr);
+    return true;
+}

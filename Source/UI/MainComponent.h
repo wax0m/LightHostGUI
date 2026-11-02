@@ -40,6 +40,7 @@ public:
         std::function<void (int)>                        duplicatePreset;
         std::function<void()>                            savePreset;
         std::function<void (int)>                        deletePreset;
+        std::function<void (int, int)>                   movePreset;   // from, final index
         // Live device stats for the title bar readout.
         std::function<double()>                          sampleRate;   // Hz
         std::function<double()>                          cpuLoad;      // 0..1

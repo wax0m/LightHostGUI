@@ -204,5 +204,53 @@ int runPresetTests (int& checks)
         check (checks, s.getPresetDocument (dup).getNodes().getNumChildren() == 4, "duplicate still copies the plugins");
     }
 
+    // movePreset: the active preset stays itself; bad indices change nothing.
+    {
+        const auto names = [] (const PresetStore& st)
+        {
+            String r;
+            for (int i = 0; i < st.getNumPresets(); ++i)
+                r << st.getPresetName (i);
+            return r;
+        };
+        const auto fresh = [&] (int active)
+        {
+            PresetStore st;
+            for (const char* n : { "A", "B", "C", "D" })
+                st.addPreset (n, docWith (1));
+            st.setActiveIndex (active);
+            return st;
+        };
+
+        auto s = fresh (2);   // C active
+        check (checks, s.movePreset (0, 3) && names (s) == "BCDA" && s.getActiveIndex() == 1,
+               "move: an earlier tab past the active one shifts the active index down");
+        s = fresh (2);
+        check (checks, s.movePreset (3, 0) && names (s) == "DABC" && s.getActiveIndex() == 3,
+               "move: a later tab before the active one shifts the active index up");
+        s = fresh (2);
+        check (checks, s.movePreset (2, 0) && names (s) == "CABD" && s.getActiveIndex() == 0,
+               "move: the active tab itself carries the active index");
+        s = fresh (0);
+        check (checks, s.movePreset (1, 2) && names (s) == "ACBD" && s.getActiveIndex() == 0,
+               "move: a move that does not cross the active tab leaves its index");
+        s = fresh (1);
+        check (checks, s.movePreset (0, 1) && names (s) == "BACD" && s.getActiveIndex() == 0,
+               "move: swapping with the active neighbour");
+
+        s = fresh (1);
+        check (checks, ! s.movePreset (1, 1) && ! s.movePreset (-1, 2) && ! s.movePreset (4, 0)
+                    && ! s.movePreset (0, -1) && ! s.movePreset (0, 4),
+               "move: same or invalid indices are refused");
+        check (checks, names (s) == "ABCD" && s.getActiveIndex() == 1, "move: a refused move changes nothing");
+
+        s = fresh (3);
+        s.movePreset (0, 3);
+        const PresetStore round = PresetStore::fromXml (s.toXml());
+        check (checks, names (round) == "BCDA" && round.getActiveIndex() == 2
+                    && round.getPresetDocument (3).getNodes().getNumChildren() == 3,
+               "move: order, active preset and documents survive the XML round-trip");
+    }
+
     return failures;
 }

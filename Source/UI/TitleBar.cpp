@@ -77,6 +77,11 @@ void TitleBar::paint (juce::Graphics& g)
             g.setColour (juce::Colours::white.withAlpha (0.06f));
             g.fillRoundedRectangle (tabRects[i].toFloat(), 6.0f);
         }
+        if (dragging && i == pressedTab)   // the tab being dragged is dimmed
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.06f));
+            g.fillRoundedRectangle (tabRects[i].toFloat(), 6.0f);
+        }
         g.setColour (isActive ? juce::Colour (0xfff0ebe3) : LightHostLookAndFeel::textSecond());
         g.drawText (names[i], tabRects[i], juce::Justification::centred);
         if (isActive)
@@ -84,6 +89,14 @@ void TitleBar::paint (juce::Graphics& g)
             g.setColour (LightHostLookAndFeel::accent());
             g.fillRect (tabRects[i].getX() + 6, getHeight() - 2, tabRects[i].getWidth() - 12, 2);
         }
+    }
+
+    // Insertion marker while a tab is dragged.
+    if (dragging && dropGap >= 0 && ! tabRects.isEmpty())
+    {
+        const int gx = dropGap < tabRects.size() ? tabRects[dropGap].getX() : tabRects.getLast().getRight();
+        g.setColour (LightHostLookAndFeel::accent());
+        g.fillRect (gx - 1, 10, 2, getHeight() - 20);
     }
 
     // "+" add-preset tab.
@@ -165,15 +178,66 @@ void TitleBar::mouseDown (const juce::MouseEvent& e)
     if (settingsRect.contains (e.getPosition()))
         return showSettingsMenu();
 
+    pressedTab = -1;
+    dragging = false;
+    dropGap = -1;
     for (int i = 0; i < tabRects.size(); ++i)
         if (tabRects[i].contains (e.getPosition()))
         {
-            if (onSelectPreset) onSelectPreset (i);
+            pressedTab = i;   // selected on release, unless this turns into a drag
             return;
         }
 
     if (plusRect.contains (e.getPosition()) && onAddPreset)
         onAddPreset();
+}
+
+// Insertion slot (0..n): before the first tab whose centre is right of x.
+int TitleBar::gapAt (int x) const
+{
+    for (int i = 0; i < tabRects.size(); ++i)
+        if (x < tabRects[i].getCentreX())
+            return i;
+    return tabRects.size();
+}
+
+void TitleBar::mouseDrag (const juce::MouseEvent& e)
+{
+    if (pressedTab < 0 || ! e.mods.isLeftButtonDown())
+        return;
+    if (! dragging && e.getDistanceFromDragStart() < dragThreshold)
+        return;
+
+    dragging = true;
+    const int gap = gapAt (e.getPosition().x);
+    if (gap != dropGap)
+    {
+        dropGap = gap;
+        repaint();
+    }
+}
+
+void TitleBar::mouseUp (const juce::MouseEvent&)
+{
+    const int from = pressedTab;
+    const bool wasDragging = dragging;
+    const int gap = dropGap;
+    pressedTab = -1;
+    dragging = false;
+    dropGap = -1;
+    if (from < 0)
+        return;
+
+    if (! wasDragging)
+    {
+        if (onSelectPreset) onSelectPreset (from);   // a plain click
+        return;
+    }
+
+    repaint();
+    const int to = gap > from ? gap - 1 : gap;
+    if (gap >= 0 && to != from && onMovePreset)
+        onMovePreset (from, to);
 }
 
 void TitleBar::mouseDoubleClick (const juce::MouseEvent& e)
@@ -198,6 +262,9 @@ void TitleBar::showTabMenu (int tab)
     m.addItem (2, juce::String::fromUTF8 ("Rename…"));
     m.addItem (3, "Duplicate");
     m.addSeparator();
+    m.addItem (5, "Move Left", tab > 0);
+    m.addItem (6, "Move Right", tab < tabRects.size() - 1);
+    m.addSeparator();
     m.addItem (4, "Delete");
 
     menuTab = tab;
@@ -214,6 +281,8 @@ void TitleBar::showTabMenu (int tab)
             else if (r == 2 && safe->onRenamePreset)    safe->onRenamePreset (tab);
             else if (r == 3 && safe->onDuplicatePreset) safe->onDuplicatePreset (tab);
             else if (r == 4 && safe->onDeletePreset)    safe->onDeletePreset (tab);
+            else if (r == 5 && safe->onMovePreset)      safe->onMovePreset (tab, tab - 1);
+            else if (r == 6 && safe->onMovePreset)      safe->onMovePreset (tab, tab + 1);
         });
 }
 

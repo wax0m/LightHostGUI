@@ -21,6 +21,7 @@ MainComponent::MainComponent (GraphController& controllerToPoll, const PresetSto
     titleBar.onDuplicatePreset = [this] (int i) { if (callbacks.duplicatePreset) callbacks.duplicatePreset (i); };
     titleBar.onSavePreset    = [this] { if (callbacks.savePreset) callbacks.savePreset(); };
     titleBar.onDeletePreset  = [this] (int i) { if (callbacks.deletePreset) callbacks.deletePreset (i); };
+    titleBar.onMovePreset    = [this] (int from, int to) { if (callbacks.movePreset) callbacks.movePreset (from, to); };
     titleBar.getSampleRate   = callbacks.sampleRate;
     titleBar.getCpuLoad      = callbacks.cpuLoad;
     titleBar.refreshPresets();

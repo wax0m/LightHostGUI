@@ -40,6 +40,9 @@ public:
     void setPresetDocument (int index, const GraphDocument&);         // overwrite (== "save")
     GraphDocument getPresetDocument (int index) const;               // load (default doc if OOR)
     void removePreset (int index);
+    // Moves preset `from` so that it ends up at index `to` (the others shift). The active preset stays the same
+    // preset (its index is recomputed). False, and nothing changes, for an invalid index or from == to.
+    bool movePreset (int from, int to);
     // "<base> copy", then "<base> copy 2", "copy 3"... — the first name no preset uses (case-insensitive).
     juce::String uniqueCopyName (const juce::String& base) const;
     // Deep-copies preset `index` right behind itself under uniqueCopyName(). Returns the new index (-1 if

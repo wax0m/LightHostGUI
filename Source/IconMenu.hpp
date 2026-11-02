@@ -68,6 +68,7 @@ private:
     void renamePreset (int index);
     void saveActivePreset();
     void deletePreset (int index);
+    void movePreset (int from, int to);
     String promptForName (const String& title, const String& initial);
 
     AudioDeviceManager deviceManager;

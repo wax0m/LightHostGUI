@@ -30,6 +30,7 @@ public:
     std::function<void (int)>            onDuplicatePreset;
     std::function<void()>                onSavePreset;
     std::function<void (int)>            onDeletePreset;
+    std::function<void (int, int)>       onMovePreset;   // from, final index
 
     // Live device stats (supplied by IconMenu via MainComponent). Null / <= 0 means
     // unknown — the readout shows a placeholder rather than a made-up number.
@@ -51,6 +52,8 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
@@ -65,6 +68,13 @@ private:
     juce::Rectangle<int> settingsRect;
     bool settingsHot = false;
     int menuTab = -1;
+
+    // A press on a tab selects it on release; dragging it past dragThreshold px reorders instead.
+    static constexpr int dragThreshold = 4;
+    int  pressedTab = -1;
+    bool dragging = false;
+    int  dropGap = -1;   // insertion slot 0..n (before tab i), valid while dragging
+    int  gapAt (int x) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TitleBar)
 };

@@ -480,6 +480,25 @@ void IconMenu::deletePreset (int index)
     }
 }
 
+// Reorders the tabs. The graph stays loaded: only the order (and the active index) changes.
+void IconMenu::movePreset (int from, int to)
+{
+    if (from < 0 || from >= store.getNumPresets() || to < 0 || to >= store.getNumPresets() || from == to)
+        return;
+
+    if (const int active = store.getActiveIndex(); active >= 0)
+        store.setPresetDocument (active, controller.snapshotDocument());   // fold the live graph in first
+    if (! store.movePreset (from, to))
+        return;
+
+    auto& settings = *getAppProperties().getUserSettings();
+    settings.setValue ("presets", store.toXml());
+    settings.saveIfNeeded();
+
+    if (mainWindow != nullptr)
+        mainWindow->refreshPresets();
+}
+
 String IconMenu::promptForName (const String& title, const String& initial)
 {
     AlertWindow w (title, "Preset name:", MessageBoxIconType::NoIcon);
@@ -868,6 +887,7 @@ void IconMenu::showMainWindow()
         cb.duplicatePreset = [this] (int i) { duplicatePreset (i); };
         cb.savePreset   = [this] { saveActivePreset(); };
         cb.deletePreset = [this] (int i) { deletePreset (i); };
+        cb.movePreset   = [this] (int from, int to) { movePreset (from, to); };
         cb.sampleRate   = [this]
         {
             auto* d = deviceManager.getCurrentAudioDevice();
