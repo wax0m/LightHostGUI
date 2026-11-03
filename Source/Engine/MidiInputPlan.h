@@ -47,7 +47,7 @@ namespace lighthost::midi
         return plan;
     }
 
-    // "MIDI input Kawai USB MIDI is in use by another app" (names joined); {} when none.
+    // "MIDI input USB MIDI Keyboard is in use by another app" (names joined); {} when none.
     inline juce::String midiInUseNotice (const juce::StringArray& names)
     {
         if (names.isEmpty())

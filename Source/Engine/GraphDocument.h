@@ -8,7 +8,7 @@
 //      <NODE uid="…" type="audioIn"|"audioOut"|"plugin" name="…" x="400" y="260"
 //            bypassed="0" state="base64…">        (state/PLUGIN only for type="plugin")
 //        <PLUGIN …/>                              (PluginDescription XML)
-//      audioOut nodes may carry outCh="2" outLabel="Loop-back 1/2" outDevice="Audient EVO4" main="1"
+//      audioOut nodes may carry outCh="2" outLabel="Loop-back 1/2" outDevice="My Interface" main="1"
 //      (the pair of device output channels they feed; see OutputPairs.h).
 //        <PREV_PLUGIN …/>                         (description before the first Replace; kept with
 //                                                  prevState="base64…", both written once, never overwritten)

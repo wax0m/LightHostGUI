@@ -82,7 +82,7 @@ int runMidiInputPlanTests (int& checks)
     // The notice.
     {
         check (checks, mi::midiInUseNotice ({}).isEmpty(), "notice: none for an empty list");
-        check (checks, mi::midiInUseNotice ({ "Kawai USB MIDI" }) == "MIDI input Kawai USB MIDI is in use by another app", "notice: one input");
+        check (checks, mi::midiInUseNotice ({ "USB MIDI Keyboard" }) == "MIDI input USB MIDI Keyboard is in use by another app", "notice: one input");
         check (checks, mi::midiInUseNotice ({ "A", "B" }) == "MIDI input A, B are in use by another app", "notice: several inputs");
     }
 

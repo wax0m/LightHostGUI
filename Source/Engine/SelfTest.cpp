@@ -646,7 +646,7 @@ int runSelfTest (const StringArray& explicitPluginPaths)
     // Test W (fake processors) — output nodes bound to device channel pairs. A 4-channel graph: source A on the
     //          main OUT (pair 0/1), source B on an extra OUT bound to pair 2/3 — each pair carries only its own
     //          source; one source on both OUTs shows on both; an inactive pair is silent and unwired; the guard
-    //          limits every pair; add / rebind / layout change publish once. Legacy scenario (Hung's setup):
+    //          limits every pair; add / rebind / layout change publish once. Legacy scenario (a user's setup):
     //          the original OUT on the first active pair of a 2-channel device is pinned to channel index 2,
     //          the wiring doesn't change, and enabling Out 1/2 afterwards leaves it on Loop-back. A binding
     //          belongs to its device: on another device the main OUT plays on the first active pair, the
@@ -798,7 +798,7 @@ int runSelfTest (const StringArray& explicitPluginPaths)
             r.expect ((int) controller.document.getOutputUids().size() == outsBefore + 1 && afterAdd - before == 1,
                       "refused calls add no node and publish nothing");
 
-            // A document with a stray OUT (as in Hung's settings) is repaired when it is loaded.
+            // A document with a stray OUT (as in a user's settings) is repaired when it is loaded.
             GraphDocument broken = controller.snapshotDocument();
             const String stray = broken.addOutputNode (1684767600, "", "EVO", 100.0f, 900.0f);
             broken.addConnection (a, 0, stray, 0);
@@ -812,7 +812,7 @@ int runSelfTest (const StringArray& explicitPluginPaths)
                       && controller.document.getNodeByUid (ok).isValid(), "the main OUT and the valid extra OUT stay");
         }
 
-        // --- Hung's legacy setup: the original OUT on Loop-back, then Out 1/2 gets enabled ---
+        // --- a user's legacy setup: the original OUT on Loop-back, then Out 1/2 gets enabled ---
         {
             GraphFixture fx (formatManager, "outputslegacy", 44100.0, 512, 2);
             GraphController& controller = *fx.controller;
@@ -840,7 +840,7 @@ int runSelfTest (const StringArray& explicitPluginPaths)
             renderN (graph, 2, block);
             r.expect (near (level (block, 0), 0.5f), "legacy: still audible on the same pair after pinning");
 
-            // Hung enables Out 1/2: the device now has 4 active outputs.
+            // The user enables Out 1/2: the device now has 4 active outputs.
             graph.setPlayConfigDetails (2, 4, 44100.0, 512);
             graph.prepareToPlay (44100.0, 512);
             const int beforeEnable = controller.getPublishCount();
