@@ -2695,6 +2695,15 @@ int runSelfTest (const StringArray& explicitPluginPaths)
         }
         reload();
 
+        // The batch retry (tray) never touches a suspended file: nothing is instantiated, the suspension stays.
+        {
+            created.clear();
+            r.expect (controller.retryMissingPlugins() == 0, "the batch retry recovers nothing while the only missing plugin is suspended");
+            r.expect (controller.isMissing (hung) && controller.isSuspendedFile (hungDesc.fileOrIdentifier)
+                          && std::find (created.begin(), created.end(), "HungSynth") == created.end() && notified == 0,
+                      "the batch retry leaves a suspended plugin suspended and uninstantiated");
+        }
+
         // An explicit retry loads it, lifts the suspension and tells the owner.
         r.expect (controller.retryMissingPlugin (hung), "an explicit retry loads a suspended plugin");
         r.expect (! controller.isMissing (hung) && ! controller.isSuspendedFile (hungDesc.fileOrIdentifier), "the retry lifts the suspension");

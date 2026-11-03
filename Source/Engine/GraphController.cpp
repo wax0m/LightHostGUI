@@ -436,8 +436,15 @@ int GraphController::retryMissingPlugins()
 
     int recovered = 0;
     for (const auto& uid : candidates)
+    {
+        // A suspended file killed a start: only the explicit retry on its own card may lift that.
+        if (const auto desc = GraphDocument::getPluginDescription (document.getNodeByUid (uid));
+            desc.has_value() && isSuspendedFile (desc->fileOrIdentifier))
+            continue;
+
         if (swapInRecoveredPlugin (uid))
             ++recovered;
+    }
 
     if (recovered > 0)
         rewireConnections();   // one publish for the whole batch

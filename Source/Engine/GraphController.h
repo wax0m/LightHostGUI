@@ -83,7 +83,7 @@ public:
     // instances untouched) with ONE publish; on failure nothing changes or publishes.
     int  getNumMissingPlugins() const noexcept { return (int) missingPlugins.size(); }
     bool retryMissingPlugin (const String& uid);   // true when the plugin is live again
-    int  retryMissingPlugins();                     // number recovered; one publish for all
+    int  retryMissingPlugins();                     // number recovered; one publish for all; skips suspended files
 
     // Replace a plugin node's implementation in place: same uid, wiring, strip, position, bypass,
     // gain/pan/mix and MIDI flag. A saved VST2 state (fxb/fxp) on the node, or in `fallbackState`
