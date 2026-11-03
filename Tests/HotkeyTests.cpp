@@ -45,10 +45,22 @@ int runHotkeyTests (int& checks)
     {
         check (checks, ! hk::parse ("A").has_value(),            "parse: a key without a modifier is refused");
         check (checks, ! hk::parse ("Ctrl+Alt").has_value(),     "parse: modifiers only are refused");
+        check (checks, ! hk::parse ("Shift+A").has_value() && ! hk::parse ("Shift+F2").has_value(), "parse: Shift alone is refused");
+        check (checks, hk::parse ("Win+Shift+A").has_value() && hk::parse ("Ctrl+Shift+K").has_value(), "parse: Shift is fine next to Ctrl/Alt/Win");
         check (checks, ! hk::parse ("Ctrl+A+B").has_value(),     "parse: two keys are refused");
         check (checks, ! hk::parse ("Ctrl+Banana").has_value(),  "parse: an unknown key is refused");
         check (checks, ! hk::parse ("").has_value() && ! hk::parse ("+").has_value() && ! hk::parse ("Ctrl+").has_value(),
                "parse: empty and dangling input is refused");
+    }
+
+    // AltGr warning
+    {
+        check (checks, hk::altGrWarning (*hk::parse ("Ctrl+Alt+1")).isNotEmpty() && hk::altGrWarning (*hk::parse ("Ctrl+Alt+A")).isNotEmpty(),
+               "altgr: Ctrl+Alt+digit/letter warns");
+        check (checks, hk::altGrWarning (*hk::parse ("Ctrl+Alt+F5")).isEmpty() && hk::altGrWarning (*hk::parse ("Ctrl+Alt+Num3")).isEmpty()
+                    && hk::altGrWarning (*hk::parse ("Ctrl+Alt+Space")).isEmpty(), "altgr: F-keys, numpad and named keys do not warn");
+        check (checks, hk::altGrWarning (*hk::parse ("Ctrl+A")).isEmpty() && hk::altGrWarning (*hk::parse ("Alt+1")).isEmpty(),
+               "altgr: a single Ctrl or Alt does not warn");
     }
 
     // key tokens from JUCE key codes
@@ -71,7 +83,9 @@ int runHotkeyTests (int& checks)
         const auto kp = hk::fromKeyPress (KeyPress ('k', ModifierKeys (ModifierKeys::ctrlModifier | ModifierKeys::shiftModifier), 'K'), true);
         check (checks, kp.has_value() && hk::format (*kp) == "Ctrl+Shift+Win+K", "fromKeyPress: modifiers, Win flag and key");
         const auto plain = hk::fromKeyPress (KeyPress ('k'), false);
-        check (checks, plain.has_value() && ! plain->hasModifier(), "fromKeyPress: no modifier is reported as such");
+        check (checks, plain.has_value() && ! plain->hasRequiredModifier(), "fromKeyPress: no modifier is reported as such");
+        const auto shiftOnly = hk::fromKeyPress (KeyPress ('k', ModifierKeys (ModifierKeys::shiftModifier), 'K'), false);
+        check (checks, shiftOnly.has_value() && shiftOnly->shift && ! shiftOnly->hasRequiredModifier(), "fromKeyPress: Shift alone is not a required modifier");
         check (checks, ! hk::fromKeyPress (KeyPress (KeyPress::escapeKey), false).has_value(), "fromKeyPress: unsupported key gives nothing");
     }
 
@@ -99,6 +113,10 @@ int runHotkeyTests (int& checks)
         check (checks, a.vk == 0x74 && a.mods == (0x0001u | 0x0002u | 0x4000u), "win32: Ctrl+Alt+F5 = MOD_ALT|MOD_CONTROL|MOD_NOREPEAT, VK_F5");
         const auto b = hk::toWin32 (*hk::parse ("Win+Shift+A"));
         check (checks, b.vk == 0x41 && b.mods == (0x0008u | 0x0004u | 0x4000u), "win32: Win+Shift+A");
+        hk::Combo shiftA;
+        shiftA.shift = true;
+        shiftA.key = "A";
+        check (checks, hk::toWin32 (shiftA).vk == 0, "win32: Shift+A is not registrable");
         const auto n = hk::toWin32 (*hk::parse ("Ctrl+Num3"));
         check (checks, n.vk == 0x63, "win32: numpad 3 = VK_NUMPAD3");
         const auto d = hk::toWin32 (*hk::parse ("Alt+5"));

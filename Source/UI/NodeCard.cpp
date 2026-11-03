@@ -19,7 +19,7 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
     // missing instrument still reads as one.
     isSource = controller.document.isSourceNode (uid);
     if (isSource)
-        format = "instrument " + juce::String::fromUTF8 ("Â·") + " " + format;
+        format = "instrument " + juce::String (juce::CharPointer_UTF8 ("\xc2\xb7")) + " " + format;
 
     // MIDI toggle: only for a live plugin that accepts MIDI. Reflects the
     // document's per-node receivesMidi flag (default on).

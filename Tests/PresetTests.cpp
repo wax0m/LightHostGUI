@@ -279,13 +279,17 @@ int runPresetTests (int& checks)
                "shortcut: a bad preset index is refused");
 
         // It follows the preset through rename and move, and survives the XML round-trip.
-        s.setPresetShortcut (0, *hk::parse ("Shift+F2"));
+        hk::Combo shiftOnly;
+        shiftOnly.shift = true;
+        shiftOnly.key = "F3";
+        check (checks, s.setPresetShortcut (0, shiftOnly) == -1 && s.getPresetShortcut (0).isEmpty(), "shortcut: a Shift-only combination is refused");
+        s.setPresetShortcut (0, *hk::parse ("Ctrl+Shift+F2"));
         s.setPresetName (0, "Renamed");
         s.movePreset (0, 2);   // B, C, Renamed
-        check (checks, s.getPresetName (2) == "Renamed" && s.getPresetShortcut (2) == "Shift+F2" && s.getPresetShortcut (1) == "Ctrl+Alt+1",
+        check (checks, s.getPresetName (2) == "Renamed" && s.getPresetShortcut (2) == "Ctrl+Shift+F2" && s.getPresetShortcut (1) == "Ctrl+Alt+1",
                "shortcut: follows the preset through rename and move");
         const PresetStore round = PresetStore::fromXml (s.toXml());
-        check (checks, round.getPresetShortcut (1) == "Ctrl+Alt+1" && round.getPresetShortcut (2) == "Shift+F2"
+        check (checks, round.getPresetShortcut (1) == "Ctrl+Alt+1" && round.getPresetShortcut (2) == "Ctrl+Shift+F2"
                     && round.registeredShortcuts().size() == 2, "shortcut: survives the XML round-trip");
 
         // Duplicate does not copy it; delete frees it; clear removes it.
@@ -293,14 +297,16 @@ int runPresetTests (int& checks)
         check (checks, s.getPresetShortcut (dup).isEmpty() && s.getPresetShortcut (1) == "Ctrl+Alt+1", "shortcut: a duplicate starts without one");
         s.removePreset (1);
         check (checks, s.findPresetByShortcut (*hk::parse ("Ctrl+Alt+1")) == -1, "shortcut: deleting the preset frees its combination");
-        const int idx = s.findPresetByShortcut (*hk::parse ("Shift+F2"));
+        const int idx = s.findPresetByShortcut (*hk::parse ("Ctrl+Shift+F2"));
         s.clearPresetShortcut (idx);
         check (checks, s.getPresetShortcut (idx).isEmpty() && s.registeredShortcuts().isEmpty(), "shortcut: cleared");
 
         // A hand-edited, unreadable value counts as none.
         PresetStore bad = PresetStore::fromXml ("<PRESETS version=\"1\" active=\"0\"><PRESET name=\"X\" shortcut=\"Banana\"/>"
-                                               "<PRESET name=\"Y\" shortcut=\"ctrl+9\"/><PRESET name=\"Z\" shortcut=\"Ctrl+9\"/></PRESETS>");
+                                               "<PRESET name=\"Y\" shortcut=\"ctrl+9\"/><PRESET name=\"Z\" shortcut=\"Ctrl+9\"/>"
+                                               "<PRESET name=\"W\" shortcut=\"Shift+F2\"/></PRESETS>");
         check (checks, bad.getPresetShortcut (0).isEmpty() && bad.getPresetShortcut (1) == "Ctrl+9", "shortcut: an unreadable stored value is ignored");
+        check (checks, bad.getPresetShortcut (3).isEmpty(), "shortcut: a stored Shift-only value is ignored");
         check (checks, bad.registeredShortcuts().size() == 1 && bad.findPresetByShortcut (*hk::parse ("Ctrl+9")) == 1,
                "shortcut: a duplicate stored combination is registered once");
     }

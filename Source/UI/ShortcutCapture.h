@@ -84,12 +84,12 @@ public:
         const auto combo = lighthost::hotkeys::fromKeyPress (key, PresetHotkeys::isWinKeyDown(), PresetHotkeys::pressedKeyToken());
         if (! combo.has_value())
             hint = "That key is not supported.";
-        else if (! combo->hasModifier())
-            hint = "Use Ctrl, Alt, Shift or Win with the key.";
+        else if (! combo->hasRequiredModifier())
+            hint = "Use Ctrl, Alt or Win with the key.";
         else
-            hint = {};
+            hint = lighthost::hotkeys::altGrWarning (*combo);
 
-        captured = (combo.has_value() && combo->hasModifier()) ? combo : std::nullopt;
+        captured = (combo.has_value() && combo->hasRequiredModifier()) ? combo : std::nullopt;
         okButton.setEnabled (captured.has_value());
         repaint();
         return true;

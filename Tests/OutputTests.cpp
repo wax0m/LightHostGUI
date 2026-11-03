@@ -57,6 +57,9 @@ int runOutputTests (int& checks)
 
         check (checks, op::pairLabel (StringArray { "Out 1", "Out 2", "Loop-back 1", "Loop-back 2" }, 2) == "Loop-back 1/2", "label: Loop-back 1/2");
         check (checks, op::pairLabel (StringArray { "Out 1", "Out 2" }, 0) == "Out 1/2", "label: Out 1/2");
+        check (checks, op::pairLabel (StringArray { "Out 9", "Out 10" }, 0) == "Out 9/10", "label: Out 9/10");
+        check (checks, op::pairLabel (StringArray { "Out 10", "Out 11" }, 0) == "Out 10/11", "label: Out 10/11 keeps both numbers whole");
+        check (checks, op::pairLabel (StringArray { "Loop-back 1", "Loop-back 2" }, 0) == "Loop-back 1/2", "label: Loop-back 1/2 from the first pair");
         check (checks, op::pairLabel (StringArray { "Line L", "Line R" }, 0) == "Line L/R", "label: Line L/R");
         check (checks, op::pairLabel (StringArray {}, 2) == "Out 3/4", "label falls back to Out 3/4 without names");
         check (checks, op::pairLabel (StringArray { "Mic", "Guitar" }, 0) == "Mic + Guitar", "label joins unrelated names");

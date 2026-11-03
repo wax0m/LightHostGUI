@@ -197,7 +197,7 @@ String PresetStore::getPresetShortcut (int index) const
 int PresetStore::setPresetShortcut (int index, const lighthost::hotkeys::Combo& combo)
 {
     auto preset = state.getChild (index);
-    if (! preset.isValid() || ! combo.hasModifier() || combo.key.isEmpty())
+    if (! preset.isValid() || ! combo.hasRequiredModifier() || combo.key.isEmpty())
         return -1;
 
     const int previous = findPresetByShortcut (combo);

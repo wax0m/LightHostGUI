@@ -63,6 +63,8 @@ namespace lighthost::outputs
         int common = 0;
         while (common < left.length() && common < right.length() && left[common] == right[common])
             ++common;
+        while (common > 0 && juce::CharacterFunctions::isDigit (left[common - 1]))   // never cut a number in half
+            --common;
 
         const auto leftRest = left.substring (common), rightRest = right.substring (common);
         if (common > 0 && leftRest.isNotEmpty() && rightRest.isNotEmpty() && leftRest.length() <= 3 && rightRest.length() <= 3)

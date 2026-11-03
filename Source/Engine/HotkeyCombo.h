@@ -18,7 +18,8 @@ struct Combo
     bool ctrl = false, alt = false, shift = false, win = false;
     juce::String key;   // canonical token: "A".."Z", "0".."9", "F1".."F24", "Num0".."Num9", "Space", "Insert", ...
 
-    bool hasModifier() const { return ctrl || alt || shift || win; }
+    // Shift alone is not enough: Shift+key would grab ordinary typing system-wide.
+    bool hasRequiredModifier() const { return ctrl || alt || win; }
 
     bool operator== (const Combo& o) const
     {
@@ -107,9 +108,18 @@ inline std::optional<Combo> parse (const juce::String& text)
         c.key = k;
         haveKey = true;
     }
-    if (! haveKey || ! c.hasModifier())
+    if (! haveKey || ! c.hasRequiredModifier())
         return std::nullopt;
     return c;
+}
+
+// Warning text for Ctrl+Alt+<letter/digit> (AltGr on many layouts types characters with it); empty when there is none.
+inline juce::String altGrWarning (const Combo& c)
+{
+    if (c.ctrl && c.alt && c.key.length() == 1)
+        return juce::String ("May block characters typed with AltGr on this keyboard; Ctrl+Alt+F1")
+               + juce::String::fromUTF8 ("\xe2\x80\x93") + "F12 is safer.";
+    return {};
 }
 
 inline juce::String format (const Combo& c)
@@ -170,8 +180,8 @@ inline juce::String keyTokenFor (int code)
 
 // The combination a key press stands for (the Win key is not part of a JUCE key press, so the caller passes it).
 // `vkToken` is the key read from its virtual-key code (tokenForVirtualKey), which wins over JUCE's character-based
-// code; empty falls back to the JUCE code. nullopt for an unsupported key; the result may have no modifier (the
-// capture dialog tells the user).
+// code; empty falls back to the JUCE code. nullopt for an unsupported key; the result may lack a required modifier
+// (the capture dialog tells the user).
 inline std::optional<Combo> fromKeyPress (const juce::KeyPress& key, bool winDown, const juce::String& vkToken = {})
 {
     const auto token = vkToken.isNotEmpty() ? vkToken : keyTokenFor (key.getKeyCode());
@@ -193,7 +203,7 @@ inline Win32Args toWin32 (const Combo& c)
     Win32Args a;
     a.vk = (unsigned) detail::virtualKeyFor (detail::canonicalKey (c.key));
     a.mods = (c.alt ? modAlt : 0u) | (c.ctrl ? modControl : 0u) | (c.shift ? modShift : 0u) | (c.win ? modWin : 0u) | modNoRepeat;
-    if (a.vk == 0 || ! c.hasModifier())
+    if (a.vk == 0 || ! c.hasRequiredModifier())
         return {};
     return a;
 }
