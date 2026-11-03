@@ -2,6 +2,43 @@
 
 All notable changes to LightHost GUI. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.2.0 — 2026-11-03
+
+### Added
+- **ASIO is now included in the Windows release** (ASIO SDK 2.3.4, used under its GPLv3 option). WASAPI exclusive
+  mode stays the default for new installs.
+- **Instruments (VST3)** as graph sources, with **MIDI input hot-plug** (devices that appear while the app runs
+  are opened). New effects are added with MIDI off, instruments with MIDI on.
+- **Several output nodes**, each bound to a channel pair of the audio device; the output pair is chosen on the node.
+- **Replace plug-in in place** (card right-click → Replace with…): keeps wiring, position and bypass, and does a
+  best-effort import of the old VST2 settings into the VST3 version.
+- **Crash recovery**: a plug-in that crashes while loading is suspended and comes back as a stand-in (its saved
+  state is kept); only an explicit retry on its card lifts that. **Shift at start = safe mode**: no plug-in is
+  loaded in that session.
+- Presets: **New Preset starts empty** (IN to OUT), **Duplicate Preset**, a context menu on the tabs, **reorder tabs by
+  dragging** or with Move Left / Right, and **global preset shortcuts** (Windows).
+- Tray: **double-click opens the window**, **Start with Windows** toggle.
+- Canvas: **double-click on empty canvas fits the view**; cards **snap to alignment guides** while dragging
+  (hold Alt to disable).
+
+### Changed
+- Plug-ins are scanned in **separate processes**, so a plug-in that crashes the scan no longer takes the app down.
+  A plug-in that was used stays loaded until exit.
+- The ADD, tray and Replace menus no longer offer plug-ins that failed the scan or are suspended.
+- "Retry missing plug-ins" in the tray skips suspended plug-ins.
+
+### Fixed
+- Preset shortcuts are read from key codes, so they work on non-US keyboard layouts; a shortcut needs Ctrl, Alt or
+  Win (Shift alone is refused).
+- A tab drag released outside the tab strip no longer moves the tab; a held shortcut switches once.
+
+### Upgrading from 1.1
+- On first start the existing output is pinned to the first complete device channel pair and the settings are saved.
+  Keep a backup of `%APPDATA%\Light Host\Light Host.settings` if you may go back to 1.1.
+- Steinberg's SE instruments (HALion Sonic, Groove Agent SE) are known to crash when hosted in-process. They get
+  suspended and show up as stand-ins.
+- Importing old VST2 settings is best effort; check the values after replacing a plug-in.
+
 ## 1.1.0 — 2026-10-23
 
 ### Added
