@@ -553,8 +553,11 @@ void IconMenu::syncHotkeys()
         hotkeys->onPressed = [this] (const String& combo) { handlePresetHotkey (combo); };
     }
 
-    for (const auto& failed : hotkeys->sync (combos))
-        postNotice ("Shortcut " + failed + " is used by another app");
+    const auto failedNow = hotkeys->sync (combos);
+    for (const auto& failed : failedNow)
+        if (! reportedHotkeyFailures.contains (failed))   // once per combination, not after every later change
+            postNotice ("Shortcut " + failed + " is used by another app");
+    reportedHotkeyFailures = failedNow;
 }
 
 // A press arrives here through the message queue, never from inside the window procedure. It is dropped while a

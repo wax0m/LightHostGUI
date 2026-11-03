@@ -92,6 +92,7 @@ private:
     bool shortcutsAllowed = false;
     bool presetLoadBusy = false;        // a preset document is being loaded; a hotkey press meanwhile is ignored
     std::unique_ptr<PresetHotkeys> hotkeys;
+    StringArray reportedHotkeyFailures;   // combinations already reported as held by another app
     std::unique_ptr<lighthost::ui::ShortcutCaptureWindow> shortcutDialog;
     bool isShutDown = false;
     bool deferredSavePending = false;   // one delayed save after a by-position import (see showReplacePluginMenu)

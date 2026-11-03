@@ -81,7 +81,7 @@ public:
             return true;
         }
 
-        const auto combo = lighthost::hotkeys::fromKeyPress (key, PresetHotkeys::isWinKeyDown());
+        const auto combo = lighthost::hotkeys::fromKeyPress (key, PresetHotkeys::isWinKeyDown(), PresetHotkeys::pressedKeyToken());
         if (! combo.has_value())
             hint = "That key is not supported.";
         else if (! combo->hasModifier())

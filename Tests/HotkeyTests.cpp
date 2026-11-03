@@ -75,6 +75,24 @@ int runHotkeyTests (int& checks)
         check (checks, ! hk::fromKeyPress (KeyPress (KeyPress::escapeKey), false).has_value(), "fromKeyPress: unsupported key gives nothing");
     }
 
+    // virtual keys give layout-independent tokens (a Czech digit row types '+', ě, š... but its VKs are 1..0)
+    {
+        check (checks, hk::tokenForVirtualKey (0x31) == "1" && hk::tokenForVirtualKey (0x41) == "A" && hk::tokenForVirtualKey (0x74) == "F5"
+                    && hk::tokenForVirtualKey (0x63) == "Num3" && hk::tokenForVirtualKey (0x25) == "Left" && hk::tokenForVirtualKey (0x20) == "Space",
+               "vk token: digits, letters, F-keys, numpad, navigation");
+        check (checks, hk::tokenForVirtualKey (0x10).isEmpty() && hk::tokenForVirtualKey (0x0D).isEmpty() && hk::tokenForVirtualKey (0x1B).isEmpty()
+                    && hk::tokenForVirtualKey (0).isEmpty() && hk::tokenForVirtualKey (0x88).isEmpty(), "vk token: modifiers and unsupported keys give nothing");
+        bool roundTrip = true;
+        for (int vk = 0x20; vk <= 0x87; ++vk)
+            if (const auto t = hk::tokenForVirtualKey (vk); t.isNotEmpty())
+                roundTrip = roundTrip && hk::toWin32 (*hk::parse ("Ctrl+" + t)).vk == (unsigned) vk;
+        check (checks, roundTrip, "vk token: every token maps back to its virtual key");
+
+        const auto cz = hk::fromKeyPress (juce::KeyPress ('+', juce::ModifierKeys (juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::altModifier), '+'),
+                                          false, hk::tokenForVirtualKey (0x31));
+        check (checks, cz.has_value() && hk::format (*cz) == "Ctrl+Alt+1", "fromKeyPress: the virtual-key token wins over the typed character");
+    }
+
     // Win32 arguments
     {
         const auto a = hk::toWin32 (*hk::parse ("Ctrl+Alt+F5"));

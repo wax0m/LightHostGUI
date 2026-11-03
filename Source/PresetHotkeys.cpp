@@ -121,6 +121,15 @@ juce::StringArray PresetHotkeys::sync (const juce::StringArray& combos)
     return failed;
 }
 
+juce::String PresetHotkeys::pressedKeyToken()
+{
+    for (int vk = 0x20; vk <= 0x87; ++vk)
+        if ((GetAsyncKeyState (vk) & 0x8000) != 0)
+            if (const auto token = lighthost::hotkeys::tokenForVirtualKey (vk); token.isNotEmpty())
+                return token;
+    return {};
+}
+
 bool PresetHotkeys::isWinKeyDown()
 {
     return (GetAsyncKeyState (VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState (VK_RWIN) & 0x8000) != 0;
@@ -132,6 +141,7 @@ struct PresetHotkeys::Impl {};
 PresetHotkeys::PresetHotkeys() = default;
 PresetHotkeys::~PresetHotkeys() = default;
 juce::StringArray PresetHotkeys::sync (const juce::StringArray& combos) { return combos; }
+juce::String PresetHotkeys::pressedKeyToken() { return {}; }
 bool PresetHotkeys::isWinKeyDown() { return false; }
 
 #endif

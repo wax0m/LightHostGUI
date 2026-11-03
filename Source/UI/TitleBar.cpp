@@ -235,7 +235,7 @@ void TitleBar::mouseDrag (const juce::MouseEvent& e)
     }
 }
 
-void TitleBar::mouseUp (const juce::MouseEvent&)
+void TitleBar::mouseUp (const juce::MouseEvent& e)
 {
     const int from = pressedTab;
     const bool wasDragging = dragging;
@@ -253,8 +253,9 @@ void TitleBar::mouseUp (const juce::MouseEvent&)
     }
 
     repaint();
+    const bool insideStrip = e.getPosition().y >= 0 && e.getPosition().y < getHeight();   // released elsewhere = cancelled
     const int to = gap > from ? gap - 1 : gap;
-    if (gap >= 0 && to != from && onMovePreset)
+    if (insideStrip && gap >= 0 && to != from && onMovePreset)
         onMovePreset (from, to);
 }
 

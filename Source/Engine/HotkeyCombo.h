@@ -122,6 +122,26 @@ inline juce::String format (const Combo& c)
     return s + c.key;
 }
 
+// Win32 virtual-key code -> canonical token (the inverse of virtualKeyFor); empty when unsupported. Layout independent:
+// the VK of the physical digit-row key is its digit on every layout, while JUCE's key code is the character it types.
+inline juce::String tokenForVirtualKey (int vk)
+{
+    if (vk < 0x20 || vk > 0x87)
+        return {};
+    juce::String candidate;
+    if ((vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A))  candidate = juce::String::charToString ((juce::juce_wchar) vk);
+    else if (vk >= 0x60 && vk <= 0x69)                              candidate = "Num" + juce::String (vk - 0x60);
+    else if (vk >= 0x70 && vk <= 0x87)                              candidate = "F" + juce::String (vk - 0x70 + 1);
+    else
+    {
+        int count = 0;
+        for (const auto* k = detail::namedKeys (count); k != detail::namedKeys (count) + count; ++k)
+            if (k->vk == vk)
+                candidate = k->token;
+    }
+    return candidate;
+}
+
 // JUCE key code -> canonical token; empty for modifier-only and unsupported keys.
 inline juce::String keyTokenFor (int code)
 {
@@ -149,10 +169,12 @@ inline juce::String keyTokenFor (int code)
 }
 
 // The combination a key press stands for (the Win key is not part of a JUCE key press, so the caller passes it).
-// nullopt for an unsupported key; the result may have no modifier (the capture dialog tells the user).
-inline std::optional<Combo> fromKeyPress (const juce::KeyPress& key, bool winDown)
+// `vkToken` is the key read from its virtual-key code (tokenForVirtualKey), which wins over JUCE's character-based
+// code; empty falls back to the JUCE code. nullopt for an unsupported key; the result may have no modifier (the
+// capture dialog tells the user).
+inline std::optional<Combo> fromKeyPress (const juce::KeyPress& key, bool winDown, const juce::String& vkToken = {})
 {
-    const auto token = keyTokenFor (key.getKeyCode());
+    const auto token = vkToken.isNotEmpty() ? vkToken : keyTokenFor (key.getKeyCode());
     if (token.isEmpty())
         return std::nullopt;
 

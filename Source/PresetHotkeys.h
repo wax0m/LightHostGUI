@@ -22,6 +22,9 @@ public:
     // (another app holds them, or they are unreadable). An empty list unregisters everything and destroys the window.
     juce::StringArray sync (const juce::StringArray& combos);
 
+    // The supported key (canonical token, see HotkeyCombo.h) that is down right now, read from virtual-key codes so it
+    // does not depend on the keyboard layout; "" when none (or off Windows).
+    static juce::String pressedKeyToken();
     static bool isWinKeyDown();   // either Windows key is down right now (a JUCE key press does not carry it)
 
 private:
