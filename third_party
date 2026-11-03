@@ -14,6 +14,6 @@ VST 3 SDK (bundled with JUCE 8.0.13)
 Website: https://github.com/steinbergmedia/vst3sdk
 License: MIT
 
-ASIO SDK (only in builds made with ASIO_SDK_DIR)
+ASIO SDK 2.3.4 (compiled into the Windows release)
 Website: https://www.steinberg.net/developers/
-License: GPLv3 option
+License: GPLv3 option (see GPL-3.0.txt)
