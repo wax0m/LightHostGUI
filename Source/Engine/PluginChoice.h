@@ -15,15 +15,16 @@ namespace lighthost::choice
     // Plugins whose format has no registered AudioPluginFormat (the VST2 entries of the old
     // upstream scans) can't be loaded: they would only ever become empty stand-ins. They stay in
     // the stored list; menus just don't offer them. The same goes for suspended files (a plugin that killed
-    // the last start): the description stays in the list, but ADD, the tray and Replace don't offer it.
+    // the last start) and for files the scan blacklisted (JUCE keeps their old description in the list): the
+    // description stays in the list, but ADD, the tray and Replace don't offer it.
     inline juce::Array<juce::PluginDescription> filterLoadable (const juce::Array<juce::PluginDescription>& types,
                                                                 const juce::StringArray& registeredFormatNames,
-                                                                const juce::StringArray& suspendedFiles = {})
+                                                                const juce::StringArray& hiddenFiles = {})
     {
         juce::Array<juce::PluginDescription> out;
         for (const auto& t : types)
             if (registeredFormatNames.contains (t.pluginFormatName)
-                && ! (t.fileOrIdentifier.isNotEmpty() && suspendedFiles.contains (t.fileOrIdentifier, true)))
+                && ! (t.fileOrIdentifier.isNotEmpty() && hiddenFiles.contains (t.fileOrIdentifier, true)))
                 out.add (t);
         return out;
     }

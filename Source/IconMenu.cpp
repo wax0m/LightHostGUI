@@ -1116,7 +1116,9 @@ juce::Array<PluginDescription> IconMenu::loadablePlugins() const
     StringArray formats;
     for (int i = 0; i < formatManager.getNumFormats(); ++i)
         formats.add (formatManager.getFormat (i)->getName());
-    return lighthost::choice::filterLoadable (knownPluginList.getTypes(), formats, controller.getSuspendedFiles());
+    StringArray hidden (controller.getSuspendedFiles());
+    hidden.addArray (knownPluginList.getBlacklistedFiles());
+    return lighthost::choice::filterLoadable (knownPluginList.getTypes(), formats, hidden);
 }
 
 // Card menu -> Replace with…: loadable plugins only, the likely successors on top. Non-modal

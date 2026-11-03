@@ -203,6 +203,23 @@ int runSettingsTests (int& checks)
         const auto offered = lighthost::choice::filterLoadable (known, StringArray { "VST3" }, StringArray (path));
         check (checks, offered.size() == 1 && offered[0].name == "Other" && known.size() == 2, "loadable: a suspended file is not offered");
         check (checks, lighthost::choice::filterLoadable (known, StringArray { "VST3" }).size() == 2, "loadable: nothing suspended, nothing hidden");
+
+        // A scan-blacklisted file keeps its old description in the list (JUCE's addToBlacklist doesn't remove it).
+        {
+            KnownPluginList scanned;
+            scanned.addType (a);
+            scanned.addType (b);
+            scanned.addToBlacklist (path);
+            StringArray hidden;
+            hidden.addArray (scanned.getBlacklistedFiles());
+            const auto shown = lighthost::choice::filterLoadable (scanned.getTypes(), StringArray { "VST3" }, hidden);
+            check (checks, scanned.getNumTypes() == 2 && shown.size() == 1 && shown[0].name == "Other",
+                   "loadable: a blacklisted file is not offered, its description stays in the list");
+
+            hidden.add ("C:/VST3/Third.vst3");
+            check (checks, lighthost::choice::filterLoadable (scanned.getTypes(), StringArray { "VST3" }, hidden).isEmpty(),
+                   "loadable: blacklisted and suspended files are both hidden");
+        }
     }
 
     dir.deleteRecursively();
