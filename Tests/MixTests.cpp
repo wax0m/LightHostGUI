@@ -112,7 +112,7 @@ int runMixTests (int& checks)
     // --- 3. GraphDocument mix default + clamp + round-trip -------------------
     {
         GraphDocument doc;
-        PluginDescription d; d.name = "Fx"; d.pluginFormatName = "VST3";
+        PluginDescription d; d.name = "Fx"; d.pluginFormatName = "VST3"; d.numInputChannels = d.numOutputChannels = 2;
         const String uid = doc.addPluginNode (d, 0.5f, 0.5f);
 
         check (checks, near (doc.getMix (uid), 1.0f), "default mix is fully wet");

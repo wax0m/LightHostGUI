@@ -6,7 +6,7 @@ cmake_policy(SET CMP0091 NEW)
 
 # LightHostGUI — a GUI fork of upstream LightHost (https://github.com/opencma/LightHost).
 # Re-stamped as a fresh 1.0.0 identity; forked from LightHost 1.3.0.
-project(LightHostGUI VERSION 1.1.0
+project(LightHostGUI VERSION 1.2.0
         DESCRIPTION "GUI fork of upstream LightHost 1.3.0"
         LANGUAGES C CXX)
 
@@ -61,11 +61,15 @@ juce_generate_juce_header(LightHost)
 target_sources(LightHost PRIVATE
     Source/HostStartup.cpp
     Source/IconMenu.cpp
+    Source/Autostart.cpp
+    Source/PresetHotkeys.cpp
     Source/PluginWindow.cpp
     Source/Engine/GraphDocument.cpp
     Source/Engine/GraphController.cpp
     Source/Engine/PresetStore.cpp
     Source/Engine/SelfTest.cpp
+    Source/Engine/PluginScanWorker.cpp
+    Source/Engine/ModulePin.cpp
     Source/UI/MainComponent.cpp
     Source/UI/NodeCard.cpp
     Source/UI/CanvasView.cpp
@@ -156,6 +160,15 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/PresetTests.cpp
         Tests/MixTests.cpp
         Tests/SettingsTests.cpp
+        Tests/Vst2StateTests.cpp
+        Tests/OutputTests.cpp
+        Tests/ScanWorkerTests.cpp
+        Tests/ModulePinTests.cpp
+        Tests/MidiInputPlanTests.cpp
+        Tests/SnapGuidesTests.cpp
+        Tests/AutostartTests.cpp
+        Tests/HotkeyTests.cpp
+        Source/Engine/ModulePin.cpp
         Source/Engine/GraphDocument.cpp
     )
 
@@ -192,6 +205,8 @@ if(LIGHTHOST_BUILD_RUNTIME_TESTS)
     target_sources(LightHostRuntimeTests PRIVATE
         Tests/GraphRuntimeTests.cpp
         Source/Engine/SelfTest.cpp
+        Source/Engine/PluginScanWorker.cpp
+        Source/Engine/ModulePin.cpp
         Source/Engine/GraphDocument.cpp
         Source/Engine/GraphController.cpp
         Source/Engine/PresetStore.cpp

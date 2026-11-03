@@ -24,8 +24,7 @@ professional pro-audio aesthetic (in the lineage of Ableton Live, Bitwig, and Se
 - **Native plugin editors** — open each plugin's own editor window.
 - **Robust scanning** — multi-instance support and a crash-blacklist plugin scan, preserved from
   upstream Light Host.
-- **Low latency** — WASAPI exclusive mode by default; ASIO available when built with an ASIO SDK
-  (see below).
+- **Low latency** — WASAPI exclusive mode by default; ASIO is included in the Windows release.
 
 ## Download
 
@@ -58,8 +57,9 @@ cmake -B build
 cmake --build build --config Release
 ```
 
-**ASIO** (Windows, optional): pass `-DASIO_SDK_DIR=<path-to-Steinberg-ASIO-SDK>` at configure time.
-ASIO is off by default; WASAPI exclusive mode is used otherwise (no SDK required).
+**ASIO** (Windows): the release build includes it. WASAPI exclusive mode stays the default device type for new
+installs. Building from source still needs `-DASIO_SDK_DIR=<path-to-Steinberg-ASIO-SDK>` at configure time;
+without it the build has no ASIO (no SDK required).
 
 ## Tests
 
@@ -93,7 +93,7 @@ notice and GPLv2 text are kept for attribution: [`LICENSE-UPSTREAM`](LICENSE-UPS
 Third-party components:
 - JUCE 8: AGPLv3
 - VST 3 SDK: MIT (bundled with JUCE 8.0.13)
-- ASIO SDK: GPLv3 option, only in builds made with `ASIO_SDK_DIR`
+- ASIO SDK 2.3.4: used under its GPLv3 option, compiled into the Windows release (text: [`GPL-3.0.txt`](GPL-3.0.txt))
 - Plug icon by Bogdan Rosu (flaticon.com): CC BY 3.0
 - Libraries compiled in through JUCE (FLAC, Ogg Vorbis, libjpeg, libpng, zlib, HarfBuzz, SheenBidi): see
   [`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt) for their notices and licence texts

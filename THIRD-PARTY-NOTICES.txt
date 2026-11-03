@@ -681,6 +681,19 @@ PreSonus Plug-In Extensions (headers bundled with JUCE)
 Written and placed in the PUBLIC DOMAIN by PreSonus Software Ltd.
 
 ==============================================================================
+ASIO SDK 2.3.4 (Windows release)
+==============================================================================
+https://www.steinberg.net/developers/
+(c) 2025, Steinberg Media Technologies GmbH, All Rights Reserved
+Licence: used under the GNU General Public License version 3 (GPLv3). The SDK's LICENSE file says: "This Software
+Development Kit is licensed under the terms of the Steinberg ASIO License, or alternatively under the terms of the
+General Public License (GPL) Version 3." LightHost GUI uses option b), the GPLv3. The SDK refers to gnu.org for the
+licence text; the full text is attached as GPL-3.0.txt.
+Only the SDK headers are compiled into the executable; no SDK files are shipped. The corresponding source is the
+public ASIO SDK download from Steinberg (https://www.steinberg.net/en/company/developers.html), together with
+the LightHost GUI source (https://github.com/wax0m/LightHostGUI).
+
+==============================================================================
 Plug Icon
 ==============================================================================
 Author: Bogdan Rosu (http://www.bogdanrosu.com), www.flaticon.com

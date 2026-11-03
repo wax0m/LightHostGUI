@@ -72,6 +72,16 @@ void TitleBar::paint (juce::Graphics& g)
     for (int i = 0; i < tabRects.size() && i < names.size(); ++i)
     {
         const bool isActive = (i == active);
+        if (i == menuTab)   // the tab whose context menu is open
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.06f));
+            g.fillRoundedRectangle (tabRects[i].toFloat(), 6.0f);
+        }
+        if (dragging && i == pressedTab)   // the tab being dragged is dimmed
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.06f));
+            g.fillRoundedRectangle (tabRects[i].toFloat(), 6.0f);
+        }
         g.setColour (isActive ? juce::Colour (0xfff0ebe3) : LightHostLookAndFeel::textSecond());
         g.drawText (names[i], tabRects[i], juce::Justification::centred);
         if (isActive)
@@ -79,6 +89,14 @@ void TitleBar::paint (juce::Graphics& g)
             g.setColour (LightHostLookAndFeel::accent());
             g.fillRect (tabRects[i].getX() + 6, getHeight() - 2, tabRects[i].getWidth() - 12, 2);
         }
+    }
+
+    // Insertion marker while a tab is dragged.
+    if (dragging && dropGap >= 0 && ! tabRects.isEmpty())
+    {
+        const int gx = dropGap < tabRects.size() ? tabRects[dropGap].getX() : tabRects.getLast().getRight();
+        g.setColour (LightHostLookAndFeel::accent());
+        g.fillRect (gx - 1, 10, 2, getHeight() - 20);
     }
 
     // "+" add-preset tab.
@@ -133,26 +151,58 @@ void TitleBar::repaintStats()
     repaint (statsClusterBounds());
 }
 
+int TitleBar::tabAt (juce::Point<int> p) const
+{
+    for (int i = 0; i < tabRects.size(); ++i)
+        if (tabRects[i].contains (p))
+            return i;
+    return -1;
+}
+
+juce::String TitleBar::getTooltip()
+{
+    if (hoverTab < 0 || ! getPresetShortcut || ! (shortcutsAvailable && shortcutsAvailable()))
+        return {};
+    const auto text = getPresetShortcut (hoverTab);
+    return text.isEmpty() ? juce::String() : "Shortcut: " + text;
+}
+
 void TitleBar::mouseMove (const juce::MouseEvent& e)
 {
+    hoverTab = tabAt (e.getPosition());
     const bool hot = settingsRect.contains (e.getPosition());
     if (hot != settingsHot) { settingsHot = hot; repaint(); }
 }
 
 void TitleBar::mouseExit (const juce::MouseEvent&)
 {
+    hoverTab = -1;
     if (settingsHot) { settingsHot = false; repaint(); }
 }
 
 void TitleBar::mouseDown (const juce::MouseEvent& e)
 {
+    // Right click opens the menu of the tab under it and never switches presets.
+    if (e.mods.isPopupMenu())
+    {
+        for (int i = 0; i < tabRects.size(); ++i)
+            if (tabRects[i].contains (e.getPosition()))
+                return showTabMenu (i);
+        return;
+    }
+    if (! e.mods.isLeftButtonDown())
+        return;
+
     if (settingsRect.contains (e.getPosition()))
         return showSettingsMenu();
 
+    pressedTab = -1;
+    dragging = false;
+    dropGap = -1;
     for (int i = 0; i < tabRects.size(); ++i)
         if (tabRects[i].contains (e.getPosition()))
         {
-            if (onSelectPreset) onSelectPreset (i);
+            pressedTab = i;   // selected on release, unless this turns into a drag
             return;
         }
 
@@ -160,14 +210,111 @@ void TitleBar::mouseDown (const juce::MouseEvent& e)
         onAddPreset();
 }
 
+// Insertion slot (0..n): before the first tab whose centre is right of x.
+int TitleBar::gapAt (int x) const
+{
+    for (int i = 0; i < tabRects.size(); ++i)
+        if (x < tabRects[i].getCentreX())
+            return i;
+    return tabRects.size();
+}
+
+void TitleBar::mouseDrag (const juce::MouseEvent& e)
+{
+    if (pressedTab < 0 || ! e.mods.isLeftButtonDown())
+        return;
+    if (! dragging && e.getDistanceFromDragStart() < dragThreshold)
+        return;
+
+    dragging = true;
+    const int gap = gapAt (e.getPosition().x);
+    if (gap != dropGap)
+    {
+        dropGap = gap;
+        repaint();
+    }
+}
+
+void TitleBar::mouseUp (const juce::MouseEvent& e)
+{
+    const int from = pressedTab;
+    const bool wasDragging = dragging;
+    const int gap = dropGap;
+    pressedTab = -1;
+    dragging = false;
+    dropGap = -1;
+    if (from < 0)
+        return;
+
+    if (! wasDragging)
+    {
+        if (onSelectPreset) onSelectPreset (from);   // a plain click
+        return;
+    }
+
+    repaint();
+    const bool insideStrip = e.getPosition().y >= 0 && e.getPosition().y < getHeight();   // released elsewhere = cancelled
+    const int to = gap > from ? gap - 1 : gap;
+    if (insideStrip && gap >= 0 && to != from && onMovePreset)
+        onMovePreset (from, to);
+}
+
 void TitleBar::mouseDoubleClick (const juce::MouseEvent& e)
 {
+    if (! e.mods.isLeftButtonDown())
+        return;
+
     for (int i = 0; i < tabRects.size(); ++i)
         if (tabRects[i].contains (e.getPosition()))
         {
             if (onRenamePreset) onRenamePreset (i);
             return;
         }
+}
+
+void TitleBar::showTabMenu (int tab)
+{
+    const bool isActive = getActivePreset && tab == getActivePreset();
+
+    juce::PopupMenu m;
+    m.addItem (1, "Save", isActive);   // saving snapshots the live graph, which is the active preset
+    m.addItem (2, juce::String::fromUTF8 ("Rename…"));
+    m.addItem (3, "Duplicate");
+    m.addSeparator();
+    m.addItem (5, "Move Left", tab > 0);
+    m.addItem (6, "Move Right", tab < tabRects.size() - 1);
+    if (shortcutsAvailable && shortcutsAvailable())
+    {
+        const auto current = getPresetShortcut ? getPresetShortcut (tab) : juce::String();
+        m.addSeparator();
+        juce::PopupMenu::Item set (juce::String::fromUTF8 ("Set Shortcut…"));
+        set.itemID = 7;
+        set.shortcutKeyDescription = current;   // shown right-aligned in the menu
+        m.addItem (set);
+        m.addItem (8, "Clear Shortcut", current.isNotEmpty());
+    }
+    m.addSeparator();
+    m.addItem (4, "Delete");
+
+    menuTab = tab;
+    repaint();
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this)
+                        .withTargetScreenArea (localAreaToGlobal (tabRects[tab])),
+        [safe = juce::Component::SafePointer<TitleBar> (this), tab] (int r)
+        {
+            if (safe == nullptr)
+                return;
+            safe->menuTab = -1;
+            safe->repaint();
+            if      (r == 1 && safe->onSavePreset)      safe->onSavePreset();
+            else if (r == 2 && safe->onRenamePreset)    safe->onRenamePreset (tab);
+            else if (r == 3 && safe->onDuplicatePreset) safe->onDuplicatePreset (tab);
+            else if (r == 4 && safe->onDeletePreset)    safe->onDeletePreset (tab);
+            else if (r == 5 && safe->onMovePreset)      safe->onMovePreset (tab, tab - 1);
+            else if (r == 6 && safe->onMovePreset)      safe->onMovePreset (tab, tab + 1);
+            else if (r == 7 && safe->onSetShortcut)     safe->onSetShortcut (tab);
+            else if (r == 8 && safe->onClearShortcut)   safe->onClearShortcut (tab);
+        });
 }
 
 void TitleBar::showSettingsMenu()
@@ -180,6 +327,7 @@ void TitleBar::showSettingsMenu()
     m.addSectionHeader ("PRESET");
     m.addItem (3, "Save Preset");
     m.addItem (4, juce::String::fromUTF8 ("Rename Preset…"));
+    m.addItem (6, "Duplicate Preset");
     m.addItem (5, "Delete Preset");
 
     settingsHot = true;
@@ -194,7 +342,8 @@ void TitleBar::showSettingsMenu()
             else if (r == 2 && onEditPlugins) onEditPlugins();
             else if (r == 3 && onSavePreset)  onSavePreset();
             else if (r == 4 && onRenamePreset && getActivePreset) onRenamePreset (getActivePreset());
-            else if (r == 5 && onDeletePreset) onDeletePreset();
+            else if (r == 6 && onDuplicatePreset && getActivePreset) onDuplicatePreset (getActivePreset());
+            else if (r == 5 && onDeletePreset && getActivePreset) onDeletePreset (getActivePreset());
         });
 }
 

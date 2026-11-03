@@ -19,6 +19,41 @@ namespace lighthost
         std::optional<juce::Point<float>> moveOutTo;     // new centre for the audioOut node, if it must move
     };
 
+    // An instrument card goes below IN (left of the serial chain), stepping down past anything it
+    // would cover. Nothing else moves.
+    inline juce::Point<float> placeNewSource (const GraphDocument& doc)
+    {
+        using namespace geometry;
+
+        const auto nodes = doc.getNodes();
+        const auto centreOf = [&doc] (const juce::String& uid) -> juce::Point<float>
+        {
+            return { doc.getNodeX (uid), doc.getNodeY (uid) };
+        };
+        const auto overlapsAny = [&] (const juce::Rectangle<float>& r)
+        {
+            const auto grown = r.expanded ((float) nodeGap * 0.5f);
+            for (int i = 0; i < nodes.getNumChildren(); ++i)
+            {
+                const auto n = nodes.getChild (i);
+                const bool endpoint = n.getProperty ("type").toString() != GraphDocument::typePlugin;
+                const auto uid = n.getProperty ("uid").toString();
+                if (grown.intersects (nodeRect (endpoint, centreOf (uid)).expanded ((float) nodeGap * 0.5f)))
+                    return true;
+            }
+            return false;
+        };
+
+        const auto in = centreOf (doc.getIoNodeUid (true));
+        auto cand = in + juce::Point<float> (0.0f, (float) (endpointHeight / 2 + nodeGap + cardHeight / 2));
+        for (int guard = 0; guard < 64 && overlapsAny (nodeRect (false, cand)); ++guard)
+            cand.y += (float) (cardHeight + nodeGap);
+
+        const auto size = nodeRect (false, { 0.0f, 0.0f });
+        return { juce::jlimit (size.getWidth()  * 0.5f, kMaxCoord, cand.x),
+                 juce::jlimit (size.getHeight() * 0.5f, kMaxCoord, cand.y) };
+    }
+
     inline NewNodePlacement placeNewPlugin (const GraphDocument& doc)
     {
         using namespace geometry;
@@ -33,12 +68,15 @@ namespace lighthost
         };
 
         // 1. Anchor: the node feeding OUT on a serial chain, otherwise the rightmost card (IN if none).
+        //    Instruments beside the chain (wired straight to OUT) are not part of it.
         juce::String anchor = inUid;
         if (doc.isLinearChain())
         {
+            const auto side = doc.getSideNodes();
             const auto conns = doc.getConnections();
             for (int i = 0; i < conns.getNumChildren(); ++i)
-                if (conns.getChild (i).getProperty ("dstUid").toString() == outUid)
+                if (conns.getChild (i).getProperty ("dstUid").toString() == outUid
+                    && side.count (conns.getChild (i).getProperty ("srcUid").toString()) == 0)
                 {
                     anchor = conns.getChild (i).getProperty ("srcUid").toString();
                     break;

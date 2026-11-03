@@ -41,6 +41,7 @@ public:
     void refreshChain()   { if (content != nullptr) content->refreshChain(); }
     void refreshPresets() { if (content != nullptr) content->refreshPresets(); }
     void revealNode (const juce::String& uid) { if (content != nullptr) content->revealNode (uid); }
+    void showNotice (const juce::String& message) { if (content != nullptr) content->showNotice (message); }
 
     // Hide to tray instead of quitting — the engine keeps running in the background.
     void closeButtonPressed() override

@@ -8,6 +8,10 @@
 //      <NODE uid="…" type="audioIn"|"audioOut"|"plugin" name="…" x="400" y="260"
 //            bypassed="0" state="base64…">        (state/PLUGIN only for type="plugin")
 //        <PLUGIN …/>                              (PluginDescription XML)
+//      audioOut nodes may carry outCh="2" outLabel="Loop-back 1/2" outDevice="My Interface" main="1"
+//      (the pair of device output channels they feed; see OutputPairs.h).
+//        <PREV_PLUGIN …/>                         (description before the first Replace; kept with
+//                                                  prevState="base64…", both written once, never overwritten)
 //      </NODE>
 //    </NODES>
 //    <CONNECTIONS>
@@ -26,6 +30,7 @@
 
 #include <JuceHeader.h>
 #include <optional>
+#include <set>
 
 class GraphDocument
 {
@@ -49,7 +54,7 @@ public:
     ValueTree getNodeByUid (const String& uid) const;
     ValueTree getNodes() const;
     ValueTree getConnections() const;
-    String getIoNodeUid (bool input) const;
+    String getIoNodeUid (bool input) const;           // output = the MAIN OUT (main="1", else the first audioOut)
 
     void setBypassed (const String& uid, bool);
     bool isBypassed (const String& uid) const;
@@ -71,6 +76,51 @@ public:
     void clearAllPluginStates();
 
     static std::optional<PluginDescription> getPluginDescription (const ValueTree& node);
+
+    // Instruments (VST3 synths, "sources"): a plugin with no audio input. Judged from the stored
+    // description, so a missing instrument still reads as one. A source has no input port, takes no
+    // dry/wet mix and can't be the target of a connection.
+    static bool isSourceDescription (const PluginDescription&);          // isInstrument || no input channels
+    bool isSourceNode (const String& uid) const;
+    // Sources whose out-edges all go to audioOut nodes (none at all counts too): they sit beside the
+    // serial chain, so isLinearChain and the tray chain ops ignore them and their edges.
+    std::set<String> getSideNodes() const;
+
+    // Replace a plugin node's implementation in place (uid, wiring, strip, position, flags stay).
+    // Sets PLUGIN + name + state; the first replace also keeps the original description and state
+    // (PREV_PLUGIN + prevState) and later replaces never overwrite them. False for a non-plugin uid.
+    bool replacePlugin (const String& uid, const PluginDescription& newDesc,
+                        const String& newStateBase64, const String& originalStateBase64);
+    String getPreviousPluginState (const String& uid) const;   // prevState, "" if never replaced
+
+    // Key of a pre-2026 PropertiesFile entry: "plugin-<type>-<name><version><format>"
+    // (type = order | bypass | state), e.g. plugin-state-TAL-Dub-3V1.1.0VST.
+    static String legacyKey (const String& type, const PluginDescription&);
+
+    //==============================================================================
+    // Output nodes bound to device channel pairs. The document's original OUT is the main OUT and can't
+    // be removed; extra OUTs are added/rebound/removed freely. A binding is the ABSOLUTE index of the
+    // pair's left channel, a display label, and the device name it was made on (all three or none).
+    String addOutputNode (int outCh, const String& label, const String& device, float x, float y);
+    std::vector<String> getOutputUids() const;         // every audioOut, document order
+    bool   isMainOutput (const String& uid) const;
+    void   setOutputBinding (const String& uid, int outCh, const String& label, const String& device);
+    int    getOutputChannel (const String& uid) const;  // -1 = not bound
+    String getOutputLabel (const String& uid) const;
+    String getOutputDevice (const String& uid) const;
+
+    // Stamp every audioOut that has no binding with (outCh, label, device) and make sure one OUT is
+    // main. Idempotent: a bound OUT (also one bound to another device) is never touched. True if anything
+    // changed. The tree form serves stored presets.
+    // Load-time repair: remove extra (never the main) OUT nodes with an impossible binding, cables included. A
+    // binding is impossible when the pair doesn't exist on the device it was made on (`device` / `numChannels` are
+    // the OPEN device; a binding made on another device can't be judged by them) or the channel is absurd on
+    // any device. True if something was removed.
+    bool removeInvalidOutputs (const String& device, int numChannels);
+    static constexpr int maxOutputChannels = 1024;
+
+    static bool pinLegacyOutputs (ValueTree& graph, int outCh, const String& label, const String& device);
+    bool pinLegacyOutputs (int outCh, const String& label, const String& device) { return pinLegacyOutputs (state, outCh, label, device); }
 
     //==============================================================================
     void addConnection (const String& srcUid, int srcCh, const String& dstUid, int dstCh);

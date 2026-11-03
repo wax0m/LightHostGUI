@@ -2,6 +2,7 @@
 #include "IconMenu.hpp"
 #include "Engine/SelfTest.h"
 #include "Engine/SettingsBackup.h"
+#include "Engine/PluginScanWorker.h"
 
 #if JUCE_WINDOWS
  #include <windows.h>   // AttachConsole for -run-selftest console output
@@ -16,8 +17,25 @@ class PluginHostApp  : public JUCEApplication
 public:
     PluginHostApp() {}
 
-    void initialise (const String&) override
+    void initialise (const String& commandLine) override
     {
+        // A plugin scan worker (launched by OutOfProcessScanner as "--lighthostscan <format> <file>") does nothing
+        // but scan that file: no settings, no tray, no audio device, no dead man's pedal.
+        if (lighthost::scan::isWorkerCommandLine (commandLine))
+        {
+            if (const auto request = lighthost::scan::parseWorkerParameters (getCommandLineParameterArray()))
+            {
+                scanWorker = std::make_unique<lighthost::scan::ScanWorker>();
+                scanWorker->start (*request);
+            }
+            else
+            {
+                setApplicationReturnValue (2);
+                quit();
+            }
+            return;
+        }
+
         // Headless self-test: verify the real binary's engine end-to-end (no tray,
         // no GUI) and exit with 0/1 so CI can gate on it.
         //   "Light Host" -run-selftest [plugin.vst3 ...]
@@ -57,7 +75,10 @@ public:
 
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
-        mainWindow = std::make_unique<IconMenu> (startupWarning);
+        // Shift held at start (or -safe-mode): nothing is instantiated, so a plugin that kills the app can be removed.
+        const bool safeMode = lighthost::guard::wantsSafeMode (getCommandLineParameterArray(),
+                                                               ModifierKeys::getCurrentModifiersRealtime().isShiftDown());
+        mainWindow = std::make_unique<IconMenu> (startupWarning, safeMode);
         #if JUCE_MAC
         Process::setDockIconVisible (false);
         #endif
@@ -81,6 +102,10 @@ public:
     const String getApplicationVersion() override    { return ProjectInfo::versionString; }
     bool moreThanOneInstanceAllowed() override
     {
+        // The scan workers are second processes of this exe next to the running tray app.
+        if (lighthost::scan::isWorkerCommandLine (getCommandLineParameters()))
+            return true;
+
         StringArray multiInstance = getParameter ("-multi-instance");
         return multiInstance.size() == 2;
     }
@@ -90,6 +115,7 @@ public:
     LookAndFeel_V3 lookAndFeel;
 
 private:
+    std::unique_ptr<lighthost::scan::ScanWorker> scanWorker;
     std::unique_ptr<IconMenu> mainWindow;
 
     void runSelfTestAndQuit()

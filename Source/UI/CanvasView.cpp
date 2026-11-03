@@ -41,6 +41,35 @@ void EndpointNode::paint (juce::Graphics& g)
     g.setColour (LightHostLookAndFeel::textSecond());
     g.setFont (LightHostLookAndFeel::mono (10.0f));
     g.drawText (text, b.withTop (centre.y + 4).withHeight (16), juce::Justification::centred);
+
+    if (pairText.isNotEmpty())
+    {
+        g.setColour (inactive ? LightHostLookAndFeel::textTert() : LightHostLookAndFeel::accent().withAlpha (0.9f));
+        g.setFont (LightHostLookAndFeel::mono (9.5f));
+        g.drawText (pairText, pairRect().removeFromTop (14), juce::Justification::centred);
+        if (inactive)
+        {
+            g.setColour (LightHostLookAndFeel::textTert());
+            g.setFont (LightHostLookAndFeel::mono (8.5f));
+            g.drawText ("off", pairRect().withTrimmedTop (14).removeFromTop (12), juce::Justification::centred);
+        }
+    }
+
+    if (getMeter)
+        if (const MeterTap* tap = getMeter())
+        {
+            const auto lv = tap->read();
+            auto area = getLocalBounds().toFloat().withTrimmedTop ((float) getHeight() - 32.0f).reduced (11.0f, 6.0f);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto bar = area.removeFromTop (4.0f);
+                area.removeFromTop (3.0f);
+                g.setColour (LightHostLookAndFeel::nodeBorder());
+                g.fillRoundedRectangle (bar, 2.0f);
+                g.setColour (LightHostLookAndFeel::accent());
+                g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, lv.peak[ch])), 2.0f);
+            }
+        }
 }
 
 void EndpointNode::mouseDown (const juce::MouseEvent& e)
@@ -49,6 +78,11 @@ void EndpointNode::mouseDown (const juce::MouseEvent& e)
         return;
     if (auto* parent = getParentComponent())
         parent->grabKeyboardFocus();
+    if (onMenu && (e.mods.isPopupMenu() || (pairText.isNotEmpty() && pairRect().contains (e.getPosition()))))
+    {
+        onMenu (uid);   // the pair label / right-click opens the pair + remove menu, no node drag
+        return;
+    }
     nodeDragActive = true;
     lastParentPos  = e.getEventRelativeTo (getParentComponent()).getPosition();
 }
@@ -82,9 +116,7 @@ CanvasView::CanvasView (GraphController& c) : controller (c)
     setWantsKeyboardFocus (true);   // Delete / Esc / Ctrl +,-,0
 
     inNode.setSize (lighthost::geometry::endpointWidth, lighthost::geometry::endpointHeight);
-    outNode.setSize (lighthost::geometry::endpointWidth, lighthost::geometry::endpointHeight);
     addAndMakeVisible (inNode);
-    addAndMakeVisible (outNode);
 
     auto wireEndpoint = [this] (EndpointNode& n)
     {
@@ -92,7 +124,6 @@ CanvasView::CanvasView (GraphController& c) : controller (c)
         n.onDragEnd  = [this] (const juce::String& uid) { persistNodePosition (uid); };
     };
     wireEndpoint (inNode);
-    wireEndpoint (outNode);
 
     refresh();
 }
@@ -100,10 +131,13 @@ CanvasView::CanvasView (GraphController& c) : controller (c)
 void CanvasView::rebuildViews()
 {
     cards.clear();
+    outNodes.clear();
     views.clear();
+    dragUid = {};   // a drag cut short by a rebuild must not leave a stale raw position or guides
+    guideX.reset();
+    guideY.reset();
 
-    inNode.uid  = controller.document.getIoNodeUid (true);
-    outNode.uid = controller.document.getIoNodeUid (false);
+    inNode.uid = controller.document.getIoNodeUid (true);
 
     auto nodes = controller.document.getNodes();
     for (int i = 0; i < nodes.getNumChildren(); ++i)
@@ -118,7 +152,32 @@ void CanvasView::rebuildViews()
         }
         else if (type == GraphDocument::typeAudioOut)
         {
-            views.push_back ({ uid, &outNode, /*hasInput*/ true, /*hasOutput*/ false });
+            auto* out = new EndpointNode ("OUT");
+            out->setSize (lighthost::geometry::endpointWidth, lighthost::geometry::endpointHeight);
+            out->uid = uid;
+            out->onDragMove = [this] (const juce::String& u, juce::Point<int> d) { moveNodeBy (u, d); };
+            out->onDragEnd  = [this] (const juce::String& u) { persistNodePosition (u); };
+
+            // The pair this OUT feeds, from its binding; "off" + a hint while the pair isn't active.
+            const int boundCh = controller.document.getOutputChannel (uid);
+            const bool foreign = boundCh >= 0 && controller.getOutputLayout().known
+                                 && controller.document.getOutputDevice (uid).isNotEmpty()
+                                 && controller.document.getOutputDevice (uid) != controller.getOutputLayout().deviceName;
+            out->pairText = boundCh >= 0 ? juce::String (boundCh + 1) + "/" + juce::String (boundCh + 2) : juce::String();
+            out->inactive = ! controller.isOutputActive (uid);
+            auto tip = controller.getOutputDisplayLabel (uid);
+            if (out->inactive)
+                tip += juce::String (tip.isEmpty() ? "" : "\n") + "Inactive: enable this pair in Audio Settings (or pick another pair).";
+            else if (foreign)
+                tip += "\nBound to another audio device (" + controller.document.getOutputDevice (uid) + "): playing on the first active pair here.";
+            out->setTooltip (tip);
+            out->onMenu = [this] (const juce::String& u) { showOutputMenu (u); };
+            if (! controller.document.isMainOutput (uid))   // the main OUT is metered in the title bar
+                out->getMeter = [this, uid] { return controller.getOutputMeter (uid); };
+
+            addAndMakeVisible (out);
+            outNodes.add (out);
+            views.push_back ({ uid, out, /*hasInput*/ true, /*hasOutput*/ false });
         }
         else
         {
@@ -144,6 +203,7 @@ void CanvasView::rebuildViews()
                     safe->refresh (true);              // keep the view where it is: no jump after a delete
                 });
             };
+            card->onContextMenu = [this] (const juce::String& u) { showCardMenu (u); };
             card->onRetry = [this] (const juce::String& u)
             {
                 // Deferred like onRemove: a successful retry refresh()es, which would
@@ -163,7 +223,7 @@ void CanvasView::rebuildViews()
             card->onDragEnd  = [this] (const juce::String& u) { persistNodePosition (u); };
             addAndMakeVisible (card);
             cards.add (card);
-            views.push_back ({ uid, card, true, true });
+            views.push_back ({ uid, card, /*hasInput*/ ! controller.document.isSourceNode (uid), /*hasOutput*/ true });
         }
     }
 }
@@ -207,7 +267,7 @@ void CanvasView::applyCanvasSize (bool keepVisible)
     juce::Rectangle<float> content;
     for (const auto& v : views)
     {
-        const auto r = nodeRect (v.comp == &inNode || v.comp == &outNode,
+        const auto r = nodeRect (dynamic_cast<EndpointNode*> (v.comp) != nullptr,
                                  { controller.getNodeX (v.uid), controller.getNodeY (v.uid) });
         content = content.isEmpty() ? r : content.getUnion (r);
     }
@@ -267,11 +327,31 @@ void CanvasView::moveNodeBy (const juce::String& uid, juce::Point<int> delta)
     if (const auto* v = viewForUid (uid))
     {
         auto* c = v->comp;
+        if (dragUid != uid)   // first move of this drag
+        {
+            dragUid    = uid;
+            rawTopLeft = c->getPosition().toFloat();
+        }
+
         // Top-left stays on the canvas and the centre within the document's coordinate range.
         const int maxCoord = (int) lighthost::geometry::kMaxCoord;
-        const int x = juce::jlimit (0, maxCoord - c->getWidth()  / 2, c->getX() + delta.x);
-        const int y = juce::jlimit (0, maxCoord - c->getHeight() / 2, c->getY() + delta.y);
+        const int maxX = maxCoord - c->getWidth()  / 2;
+        const int maxY = maxCoord - c->getHeight() / 2;
+        rawTopLeft = { juce::jlimit (0.0f, (float) maxX, rawTopLeft.x + (float) delta.x),
+                       juce::jlimit (0.0f, (float) maxY, rawTopLeft.y + (float) delta.y) };
+
+        std::vector<juce::Rectangle<float>> others;
+        for (const auto& o : views)
+            if (o.uid != uid)
+                others.push_back (o.comp->getBounds().toFloat());
+        const auto snapped = lighthost::ui::snap::computeSnap (
+            c->getLocalBounds().toFloat().withPosition (rawTopLeft), others, zoom, juce::ModifierKeys::getCurrentModifiersRealtime().isAltDown());
+
+        const int x = juce::jlimit (0, maxX, juce::roundToInt (rawTopLeft.x + snapped.offset.x));
+        const int y = juce::jlimit (0, maxY, juce::roundToInt (rawTopLeft.y + snapped.offset.y));
         c->setTopLeftPosition (x, y);
+        guideX = snapped.guideX;
+        guideY = snapped.guideY;
 
         // Past the right / bottom edge the canvas grows live (it only shrinks again on drop). The
         // document still holds the old position until then, so resized() must not re-place nodes.
@@ -288,6 +368,13 @@ void CanvasView::moveNodeBy (const juce::String& uid, juce::Point<int> delta)
 
 void CanvasView::persistNodePosition (const juce::String& uid)
 {
+    const bool hadGuide = guideX.has_value() || guideY.has_value();
+    dragUid = {};
+    guideX.reset();
+    guideY.reset();
+    if (hadGuide)
+        repaint();
+
     if (const auto* v = viewForUid (uid))
     {
         const auto centre = v->comp->getBounds().getCentre();
@@ -432,6 +519,83 @@ void CanvasView::showCableMenu (const Cable& cable)
         });
 }
 
+// Right-click menu of a plugin card. Async like the cable menu (no nested message loop), and the
+// result is applied through a SafePointer: the canvas may be gone by the time the user picks.
+void CanvasView::showCardMenu (const juce::String& uid)
+{
+    const bool unavailable = controller.isNodeUnavailable (uid);
+    const auto where = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
+
+    juce::PopupMenu m;
+    if (unavailable)
+    {
+        m.addItem (1, "Replace with...");
+        m.addItem (2, "Open editor", false);
+    }
+    else
+    {
+        m.addItem (2, "Open editor");
+        m.addItem (1, "Replace with...");
+    }
+    m.addSeparator();
+    m.addItem (3, "Remove");
+
+    auto* self = this;   // MSVC rejects `this` inside the nested init-capture
+    m.showMenuAsync (juce::PopupMenu::Options(),
+        [safe = juce::Component::SafePointer<CanvasView> (self), uid, where] (int r)
+        {
+            if (safe == nullptr || r == 0)
+                return;
+            if (r == 1 && safe->onReplace)
+                safe->onReplace (uid, where);
+            else if (r == 2 && safe->onOpenEditor)
+                safe->onOpenEditor (uid);
+            else if (r == 3)
+            {
+                safe->controller.removeNode (uid);   // heals around the node; branches survive
+                safe->refresh (true);                // keep the view where it is
+            }
+        });
+}
+
+// Right-click (or click on the pair text) of an OUT: move it to another device pair, or remove an
+// extra OUT. Async like the other menus; applied through a SafePointer.
+void CanvasView::showOutputMenu (const juce::String& outUid)
+{
+    const auto& layout = controller.getOutputLayout();
+    const int pairs = layout.names.size() / 2;
+    const int current = controller.document.getOutputChannel (outUid);
+
+    juce::PopupMenu m;
+    m.addSectionHeader ("Output pair");
+    if (! layout.known || pairs == 0)
+        m.addItem (1000, "No audio device open", false);
+    for (int p = 0; layout.known && p < pairs; ++p)
+    {
+        const bool active = lighthost::outputs::activeIndex (layout.activeMask, 2 * p) >= 0;
+        m.addItem (p + 1, lighthost::outputs::pairLabel (layout.names, 2 * p) + (active ? "" : "  (inactive)"),
+                   true, current == 2 * p);
+    }
+    if (! controller.document.isMainOutput (outUid))
+    {
+        m.addSeparator();
+        m.addItem (2000, "Remove output");
+    }
+
+    auto* self = this;   // MSVC rejects `this` inside the nested init-capture
+    m.showMenuAsync (juce::PopupMenu::Options(),
+        [safe = juce::Component::SafePointer<CanvasView> (self), outUid] (int r)
+        {
+            if (safe == nullptr || r <= 0 || r == 1000)
+                return;
+            if (r == 2000)
+                safe->controller.removeNode (outUid);
+            else
+                safe->controller.setOutputBinding (outUid, 2 * (r - 1));
+            safe->refresh (true);   // pair texts, meters and cables follow the change
+        });
+}
+
 //== Mouse: wire drag, cable select, pan =======================================
 void CanvasView::mouseDown (const juce::MouseEvent& e)
 {
@@ -439,6 +603,8 @@ void CanvasView::mouseDown (const juce::MouseEvent& e)
     const auto p = e.position;
     panArmed = panning = false;
     pressedCable.reset();
+    if (e.getNumberOfClicks() <= 1)
+        badgeDeletedCable = false;   // kept through the 2nd press: a double-click on the badge must not Fit
 
     // Right-click on a cable: context menu.
     if (e.mods.isPopupMenu())
@@ -456,6 +622,7 @@ void CanvasView::mouseDown (const juce::MouseEvent& e)
         if (const auto badge = deleteBadgeCentre(); badge.has_value() && badge->getDistanceFrom (p) <= kBadgeRadius + 2.0f)
         {
             deleteSelectedCable();
+            badgeDeletedCable = true;
             return;
         }
 
@@ -574,6 +741,8 @@ void CanvasView::mouseDoubleClick (const juce::MouseEvent& e)
         pressedCable.reset();
         repaint();
     }
+    else if (onZoomFit && ! badgeDeletedCable && outputPortAt (e.position).isEmpty())
+        onZoomFit();   // empty canvas: same as the Fit button
 }
 
 void CanvasView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
@@ -643,6 +812,18 @@ void CanvasView::resized()
 }
 
 //== Paint =====================================================================
+void CanvasView::paintOverChildren (juce::Graphics& g)
+{
+    if (! guideX.has_value() && ! guideY.has_value())
+        return;   // only while a drag is snapped
+
+    g.setColour (LightHostLookAndFeel::accent().withAlpha (0.4f));
+    if (guideX.has_value())
+        g.fillRect (juce::Rectangle<float> (*guideX - 0.5f, 0.0f, 1.0f, (float) getHeight()));
+    if (guideY.has_value())
+        g.fillRect (juce::Rectangle<float> (0.0f, *guideY - 0.5f, (float) getWidth(), 1.0f));
+}
+
 void CanvasView::paint (juce::Graphics& g)
 {
     juce::ColourGradient bg (LightHostLookAndFeel::appBgTop(), (float) getWidth() * 0.5f, -40.0f,

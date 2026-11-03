@@ -3,6 +3,8 @@
 #include "SettingsBackup.h"
 #include "NodeGeometry.h"
 #include "NodePlacement.h"
+#include "Vst2State.h"
+#include "ModulePin.h"
 
 GraphController::GraphController (AudioProcessorGraph& g, AudioPluginFormatManager& fm)
     : graph (g), formatManager (fm)
@@ -43,6 +45,10 @@ void GraphController::loadFrom (PropertiesFile& settings)
         document = GraphDocument::migrateFromLegacySettings (settings);
     }
 
+    fixedOnLoad = repairOutputs();
+    if (pinTargetNow.has_value())   // a device is already open: bind the unbound OUTs before the first build
+        fixedOnLoad = document.pinLegacyOutputs (pinTargetNow->outCh, pinTargetNow->label, pinTargetNow->device) || fixedOnLoad;
+
     rebuild();
 }
 
@@ -59,6 +65,7 @@ std::vector<String> GraphController::getChainUids() const
     std::vector<String> chain;
     const String inUid  = document.getIoNodeUid (true);
     const String outUid = document.getIoNodeUid (false);
+    const std::set<String> side = document.getSideNodes();   // instruments beside the chain
 
     chain.push_back (inUid);
 
@@ -92,7 +99,8 @@ std::vector<String> GraphController::getChainUids() const
     int numPluginNodes = 0;
     ValueTree nodes = document.getNodes();
     for (int i = 0; i < nodes.getNumChildren(); ++i)
-        if (nodes.getChild (i).getProperty ("type").toString() == GraphDocument::typePlugin)
+        if (nodes.getChild (i).getProperty ("type").toString() == GraphDocument::typePlugin
+            && side.count (nodes.getChild (i).getProperty ("uid").toString()) == 0)
             ++numPluginNodes;
 
     if (chain.back() != outUid || (int) chain.size() != numPluginNodes + 2)
@@ -102,7 +110,8 @@ std::vector<String> GraphController::getChainUids() const
         for (int i = 0; i < nodes.getNumChildren(); ++i)
         {
             ValueTree node = nodes.getChild (i);
-            if (node.getProperty ("type").toString() == GraphDocument::typePlugin)
+            if (node.getProperty ("type").toString() == GraphDocument::typePlugin
+                && side.count (node.getProperty ("uid").toString()) == 0)
                 chain.push_back (node.getProperty ("uid").toString());
         }
         chain.push_back (outUid);
@@ -113,12 +122,21 @@ std::vector<String> GraphController::getChainUids() const
 
 void GraphController::rewriteChainConnections (const std::vector<String>& chainUids)
 {
+    // Edges of instruments beside the chain (source -> OUT) are not chain edges: keep them.
+    const std::set<String> side = document.getSideNodes();
+    std::vector<Connection> kept;
+    for (const auto& c : getConnections())
+        if (side.count (c.srcUid) > 0)
+            kept.push_back (c);
+
     document.clearConnections();
     for (size_t i = 0; i + 1 < chainUids.size(); ++i)
     {
         document.addConnection (chainUids[i], 0, chainUids[i + 1], 0);
         document.addConnection (chainUids[i], 1, chainUids[i + 1], 1);
     }
+    for (const auto& c : kept)
+        document.addConnection (c.srcUid, c.srcCh, c.dstUid, c.dstCh);
     // NOTE: node canvas positions are user-owned (dragged on the canvas, persisted
     // per node). Do NOT rewrite them here — chain edits (add/remove/move) must
     // leave every existing node exactly where the user put it.
@@ -186,6 +204,7 @@ void GraphController::rebuild()
 
 void GraphController::rebuildNow()
 {
+    const GuardScope guardScope (*this);
     // INVARIANT: the window-close pump below must stay the FIRST statement. It can
     // dispatch queued edits, which are only safe because the live graph and
     // uidToNodeId are still intact at that point — never move teardown above it.
@@ -193,13 +212,12 @@ void GraphController::rebuildNow()
     clearBatched();
     uidToNodeId.clear();
     inputMeter = outputMeter = nullptr;
+    outputMeters.clear();
     nodeStrips.clear();
     nodeMixes.clear();
     midiInputNode = nullptr;
     monoNode = nullptr;
     missingPlugins.clear();
-
-    using IOProcessor = AudioProcessorGraph::AudioGraphIOProcessor;
 
     ValueTree nodes = document.getNodes();
     for (int i = 0; i < nodes.getNumChildren(); ++i)
@@ -208,44 +226,61 @@ void GraphController::rebuildNow()
         const String uid  = nodeTree.getProperty ("uid").toString();
         const String type = nodeTree.getProperty ("type").toString();
 
-        std::unique_ptr<AudioProcessor> processor;
-
-        if (type == GraphDocument::typeAudioIn)
-            processor = std::make_unique<IOProcessor> (IOProcessor::audioInputNode);
-        else if (type == GraphDocument::typeAudioOut)
-            processor = std::make_unique<IOProcessor> (IOProcessor::audioOutputNode);
-        else if (type == GraphDocument::typePlugin)
-        {
+        ignoreUnused (uid);
+        if (type == GraphDocument::typePlugin)
             addPluginNodeToGraph (nodeTree);
-            continue;
-        }
-
-        if (processor != nullptr)
-        {
-            if (auto node = addNodeBatched (std::move (processor)))
-            {
-                node->setBypassed ((bool) nodeTree.getProperty ("bypassed", false));
-                uidToNodeId[uid] = node->nodeID;
-            }
-        }
+        else
+            registerIoNode (nodeTree);
     }
 
-    ValueTree connections = document.getConnections();
-    for (int i = 0; i < connections.getNumChildren(); ++i)
-    {
-        ValueTree c = connections.getChild (i);
-        const auto src = uidToNodeId.find (c.getProperty ("srcUid").toString());
-        const auto dst = uidToNodeId.find (c.getProperty ("dstUid").toString());
-        if (src != uidToNodeId.end() && dst != uidToNodeId.end())
-            connectBatched ({ { src->second, (int) c.getProperty ("srcCh") },
-                                   { dst->second, (int) c.getProperty ("dstCh") } });
-    }
+    connectDocumentEdges();
 
     insertNodeStrips();
     insertMasterMeters();
     insertInputConditioner();
     insertMidiRouting();
     publishTopology();
+}
+
+// An audioIn/audioOut document node -> its live graph IO node (other types are ignored).
+void GraphController::registerIoNode (const ValueTree& nodeTree)
+{
+    using IOProcessor = AudioProcessorGraph::AudioGraphIOProcessor;
+    const String type = nodeTree.getProperty ("type").toString();
+
+    std::unique_ptr<AudioProcessor> processor;
+    if (type == GraphDocument::typeAudioIn)
+        processor = std::make_unique<IOProcessor> (IOProcessor::audioInputNode);
+    else if (type == GraphDocument::typeAudioOut)
+        processor = std::make_unique<IOProcessor> (IOProcessor::audioOutputNode);
+    else
+        return;
+
+    if (auto node = addNodeBatched (std::move (processor)))
+    {
+        node->setBypassed ((bool) nodeTree.getProperty ("bypassed", false));
+        uidToNodeId[nodeTree.getProperty ("uid").toString()] = node->nodeID;
+    }
+}
+
+// Wire every document connection between live nodes. (An edge from the second channel of a
+// mono synth is illegal here and skipped; spliceStripAfter re-creates it from the strip.)
+void GraphController::connectDocumentEdges()
+{
+    ValueTree connections = document.getConnections();
+    for (int i = 0; i < connections.getNumChildren(); ++i)
+    {
+        ValueTree c = connections.getChild (i);
+        const auto src = uidToNodeId.find (c.getProperty ("srcUid").toString());
+        const auto dst = uidToNodeId.find (c.getProperty ("dstUid").toString());
+        if (src == uidToNodeId.end() || dst == uidToNodeId.end())
+            continue;
+        if (getOutputBase (c.getProperty ("dstUid").toString()) < 0)
+            continue;   // an OUT whose pair isn't active stays unwired: nothing may alias onto another pair
+
+        connectBatched ({ { src->second, (int) c.getProperty ("srcCh") },
+                          { dst->second, (int) c.getProperty ("dstCh") } });
+    }
 }
 
 // Instantiate one plugin document node into the live graph. On load failure the
@@ -257,6 +292,34 @@ AudioProcessorGraph::Node* GraphController::addPluginNodeToGraph (const ValueTre
     return registerPluginNode (nodeTree, createPluginInstanceFor (nodeTree));
 }
 
+// Instantiate a plugin from its description and promote mono-defaulting plugins
+// (e.g. MAutoPitch) to stereo before any state is restored, so they don't collapse
+// a channel in the stereo chain. Touches nothing but the new instance.
+std::unique_ptr<AudioProcessor> GraphController::createInstanceFrom (const PluginDescription& desc)
+{
+    if (safeMode)
+        return nullptr;   // the one choke point: add, rebuild, retry and replace all end up here
+
+    std::unique_ptr<AudioProcessor> created;
+    if (loadGuardFile != File())   // kept until the gesture ends: the crash may come later, in setState or publish
+        lighthost::guard::writeGuard (loadGuardFile, desc.fileOrIdentifier, desc.name);
+    if (instanceFactory)
+        created = instanceFactory (desc);
+    else
+    {
+        String errorMessage;
+        created = formatManager.createPluginInstance (desc, graph.getSampleRate(),
+                                                      graph.getBlockSize(), errorMessage);
+        if (created != nullptr)   // a plugin thread may outlive its instance: never unload a module that was used
+            lighthost::modules::pinPluginModule (File (desc.fileOrIdentifier));
+    }
+    if (created == nullptr)
+        return nullptr;
+
+    lighthost::buses::forceStereo (*created, graph.getSampleRate(), graph.getBlockSize());
+    return std::unique_ptr<AudioProcessor> (std::move (created));
+}
+
 // Create the hosted plugin for a document node (stereo-forced, saved state
 // restored), or nullptr when it can't be loaded. Touches nothing but the new
 // instance, so the retry path can call it before deciding to change the graph.
@@ -266,15 +329,12 @@ std::unique_ptr<AudioProcessor> GraphController::createPluginInstanceFor (const 
     if (! desc.has_value())
         return nullptr;
 
-    String errorMessage;
-    auto created = formatManager.createPluginInstance (*desc, graph.getSampleRate(),
-                                                       graph.getBlockSize(), errorMessage);
+    if (! explicitRetry && isSuspendedFile (desc->fileOrIdentifier))
+        return nullptr;   // suspended after it killed a start: stand-in, the state stays in the document
+
+    auto created = createInstanceFrom (*desc);
     if (created == nullptr)
         return nullptr;
-
-    // Promote mono-defaulting plugins (e.g. MAutoPitch) to stereo before
-    // restoring state, so they don't collapse a channel in the stereo chain.
-    lighthost::buses::forceStereo (*created, graph.getSampleRate(), graph.getBlockSize());
 
     const String stateB64 = nodeTree.getProperty ("state").toString();
     MemoryBlock stateBinary;
@@ -338,9 +398,19 @@ bool GraphController::swapInRecoveredPlugin (const String& uid)
     if (! nodeTree.isValid())
         return false;
 
+    const GuardScope guardScope (*this);
+    const ScopedValueSetter<bool> retrying (explicitRetry, true);
     auto instance = createPluginInstanceFor (nodeTree);
     if (instance == nullptr)
         return false;
+
+    if (const auto desc = GraphDocument::getPluginDescription (nodeTree);
+        desc.has_value() && isSuspendedFile (desc->fileOrIdentifier))
+    {
+        suspendedFiles.removeString (desc->fileOrIdentifier, true);   // it loaded: lift the suspension for good
+        if (onSuspendedChanged)
+            onSuspendedChanged();
+    }
 
     removePluginNodeFromGraph (uid);
     const bool registered = registerPluginNode (nodeTree, std::move (instance)) != nullptr;
@@ -350,6 +420,7 @@ bool GraphController::swapInRecoveredPlugin (const String& uid)
 
 bool GraphController::retryMissingPlugin (const String& uid)
 {
+    const GuardScope guardScope (*this);
     if (! swapInRecoveredPlugin (uid))
         return false;
 
@@ -359,17 +430,171 @@ bool GraphController::retryMissingPlugin (const String& uid)
 
 int GraphController::retryMissingPlugins()
 {
+    const GuardScope guardScope (*this);
     // Copy first: a successful swap erases its uid from missingPlugins.
     const std::vector<String> candidates (missingPlugins.begin(), missingPlugins.end());
 
     int recovered = 0;
     for (const auto& uid : candidates)
+    {
+        // A suspended file killed a start: only the explicit retry on its own card may lift that.
+        if (const auto desc = GraphDocument::getPluginDescription (document.getNodeByUid (uid));
+            desc.has_value() && isSuspendedFile (desc->fileOrIdentifier))
+            continue;
+
         if (swapInRecoveredPlugin (uid))
             ++recovered;
+    }
 
     if (recovered > 0)
         rewireConnections();   // one publish for the whole batch
     return recovered;
+}
+
+//==============================================================================
+namespace
+{
+    std::vector<float> readParamValues (AudioProcessor& p)
+    {
+        std::vector<float> v;
+        for (auto* param : p.getParameters())
+            v.push_back (param->getValue());
+        return v;
+    }
+
+    int countChanged (AudioProcessor& p, const std::vector<float>& baseline)
+    {
+        const auto& params = p.getParameters();
+        int n = 0;
+        for (int i = 0; i < params.size() && i < (int) baseline.size(); ++i)
+            if (std::abs (params[i]->getValue() - baseline[(size_t) i]) > 1.0e-4f)
+                ++n;
+        return n;
+    }
+
+    // Feed `wrapped` (a VST3PluginState) to the fresh instance; if no parameter moved, put the
+    // defaults back. A state-only change we can't see counts as failure.
+    int tryWrappedState (AudioProcessor& p, const MemoryBlock& wrapped, const MemoryBlock& defaultState,
+                         const std::vector<float>& defaults)
+    {
+        p.setStateInformation (wrapped.getData(), (int) wrapped.getSize());
+        const int n = countChanged (p, defaults);
+        if (n == 0)
+            p.setStateInformation (defaultState.getData(), (int) defaultState.getSize());
+        return n;
+    }
+
+    // Import a parsed VST2 state into a fresh (not yet graph-attached) VST3 instance.
+    void importVst2State (AudioProcessor& p, const lighthost::vst2::Blob& blob, const MemoryBlock& whole,
+                          GraphController::ReplaceResult& result)
+    {
+        using Import = GraphController::ReplaceResult::Import;
+        namespace v2 = lighthost::vst2;
+
+        MemoryBlock defaultState;
+        p.getStateInformation (defaultState);
+        const auto defaults = readParamValues (p);
+
+        if (blob.kind == v2::Kind::bankChunk || blob.kind == v2::Kind::programChunk)
+        {
+            int n = tryWrappedState (p, v2::wrapAsVst3State (whole.getData(), whole.getSize()), defaultState, defaults);
+            if (n > 0)
+                result.import = Import::fullStream;
+            else if ((n = tryWrappedState (p, v2::wrapAsVst3State (blob.chunk.getData(), blob.chunk.getSize()),
+                                           defaultState, defaults)) > 0)
+                result.import = Import::bareChunk;
+            result.changedParams = n;
+        }
+        else
+        {
+            auto* bypass = p.getBypassParameter();
+            const auto& params = p.getParameters();
+            const int count = jmin ((int) blob.params.size(), params.size());
+            for (int i = 0; i < count; ++i)
+            {
+                auto* param = params[i];
+                if (param->isMetaParameter() || param == bypass)
+                    continue;
+                param->setValueNotifyingHost (jlimit (0.0f, 1.0f, blob.params[(size_t) i]));   // host side, like the param bridge
+            }
+            result.changedParams = countChanged (p, defaults);
+            if (result.changedParams > 0)
+                result.import = Import::paramsByIndex;
+        }
+    }
+}
+
+GraphController::ReplaceResult GraphController::replacePlugin (const String& uid, const PluginDescription& newDesc,
+                                                               const MemoryBlock* fallbackState)
+{
+    ReplaceResult result;
+    const GuardScope guardScope (*this);
+
+    ValueTree nodeTree = document.getNodeByUid (uid);
+    if (! nodeTree.isValid() || nodeTree.getProperty ("type").toString() != GraphDocument::typePlugin)
+    {
+        result.message = "Not a plugin node";
+        return result;
+    }
+
+    // Instantiate FIRST: a plugin that can't load leaves the document and the graph untouched.
+    auto instance = createInstanceFrom (newDesc);
+    if (instance == nullptr)
+    {
+        result.message = "Could not load " + newDesc.name;
+        return result;
+    }
+
+    // Source state: a live plugin's current state, else the saved one (stand-ins never hold it),
+    // else the caller's fallback (the legacy settings key).
+    MemoryBlock source;
+    if (auto* live = isMissing (uid) ? nullptr : getNodeForUid (uid))
+        live->getProcessor()->getStateInformation (source);
+    else
+        source.fromBase64Encoding (nodeTree.getProperty ("state").toString());
+    if (source.isEmpty() && fallbackState != nullptr)
+        source = *fallbackState;
+
+    std::optional<lighthost::vst2::Blob> vst2;
+    if (newDesc.pluginFormatName == "VST3" && ! source.isEmpty())
+        vst2 = lighthost::vst2::parse (source.getData(), source.getSize());
+
+    if (vst2.has_value())
+    {
+        importVst2State (*instance, *vst2, source, result);
+        result.message = result.import == ReplaceResult::Import::paramsByIndex
+                             ? String (CharPointer_UTF8 ("Parameters copied by position \xe2\x80\x94 check by ear"))
+                         : result.import != ReplaceResult::Import::none
+                             ? String ("Settings imported")
+                             : String (CharPointer_UTF8 ("Defaults loaded \xe2\x80\x94 the original settings stay saved with the preset"));
+    }
+    else
+    {
+        result.message = source.isEmpty() ? "Plugin replaced" : "Plugin replaced, the new plugin starts at its defaults";
+    }
+
+    MemoryBlock newState;
+    instance->getStateInformation (newState);
+    if (! document.replacePlugin (uid, newDesc, newState.toBase64Encoding(), source.toBase64Encoding()))
+    {
+        result = {};
+        result.message = "Not a plugin node";
+        return result;
+    }
+
+    // An instrument has no input: edges that fed the old plugin can't survive the swap.
+    if (GraphDocument::isSourceDescription (newDesc))
+        for (const auto& c : getConnections())
+            if (c.dstUid == uid)
+                document.removeConnection (c.srcUid, c.srcCh, c.dstUid, c.dstCh);
+
+    // Same swap as the missing-plugin recovery; removal also closes the node's editor window.
+    removePluginNodeFromGraph (uid);
+    const bool registered = registerPluginNode (nodeTree, std::move (instance)) != nullptr;
+    jassert (registered);
+    rewireConnections();   // the one publish for this gesture
+    result.ok = registered;
+    return result;
 }
 
 void GraphController::captureStates()
@@ -415,15 +640,44 @@ std::vector<GraphController::ChainItem> GraphController::getChain() const
 // it is in the way. Positions are GUI-only, so this publishes nothing.
 String GraphController::addPluginNodeAtNextSlot (const PluginDescription& desc)
 {
-    const auto placement = lighthost::placeNewPlugin (document);
-    const String uid = document.addPluginNode (desc, placement.centre.x, placement.centre.y);
-    if (placement.moveOutTo.has_value())
-        document.setNodePosition (document.getIoNodeUid (false), placement.moveOutTo->x, placement.moveOutTo->y);
+    const bool source = GraphDocument::isSourceDescription (desc);
+
+    String uid;
+    if (source)
+    {
+        const auto at = lighthost::placeNewSource (document);
+        uid = document.addPluginNode (desc, at.x, at.y);
+    }
+    else
+    {
+        const auto placement = lighthost::placeNewPlugin (document);
+        uid = document.addPluginNode (desc, placement.centre.x, placement.centre.y);
+        if (placement.moveOutTo.has_value())
+            document.setNodePosition (document.getIoNodeUid (false), placement.moveOutTo->x, placement.moveOutTo->y);
+    }
+
+    document.setReceivesMidi (uid, source);
     return uid;
+}
+
+String GraphController::addSourcePlugin (const PluginDescription& desc)
+{
+    const GuardScope guardScope (*this);
+    const String uid = addPluginNodeAtNextSlot (desc);
+    const String out = document.getIoNodeUid (false);
+    document.addConnection (uid, 0, out, 0);
+    document.addConnection (uid, 1, out, 1);
+
+    addPluginNodeToGraph (document.getNodeByUid (uid));
+    rewireConnections();   // the one publish for this gesture
+    return uidToNodeId.count (uid) > 0 ? uid : String();
 }
 
 String GraphController::addPlugin (const PluginDescription& desc)
 {
+    if (GraphDocument::isSourceDescription (desc))
+        return addSourcePlugin (desc);
+
     // Serial append rewrites ALL connections as a chain, which would destroy
     // parallel routing — on a branched graph the node is added unconnected instead.
     return isLinearChain() ? appendToChain (desc) : addNodeUnconnected (desc);
@@ -431,6 +685,10 @@ String GraphController::addPlugin (const PluginDescription& desc)
 
 String GraphController::appendToChain (const PluginDescription& desc)
 {
+    const GuardScope guardScope (*this);
+    if (GraphDocument::isSourceDescription (desc))
+        return addSourcePlugin (desc);   // an instrument has no place in a serial effect chain
+
     std::vector<String> chain = getChainUids();
 
     const String uid = addPluginNodeAtNextSlot (desc);
@@ -446,6 +704,10 @@ String GraphController::appendToChain (const PluginDescription& desc)
 
 String GraphController::addNodeUnconnected (const PluginDescription& desc)
 {
+    const GuardScope guardScope (*this);
+    if (GraphDocument::isSourceDescription (desc))
+        return addSourcePlugin (desc);
+
     const String uid = addPluginNodeAtNextSlot (desc);
     addPluginNodeToGraph (document.getNodeByUid (uid));
     rewireConnections();   // existing connections are untouched — nothing is rewritten serially
@@ -459,6 +721,9 @@ String GraphController::addNodeUnconnected (const PluginDescription& desc)
 // objects are torn down: no plugin is reloaded and no other editor is closed.
 void GraphController::removeNode (const String& uid)
 {
+    if (uid == document.getIoNodeUid (true) || document.isMainOutput (uid))
+        return;   // IN and the main OUT are permanent
+
     std::vector<Connection> ins;    // X -> node, verbatim
     std::vector<Connection> outs;   // node -> Y, verbatim
 
@@ -547,24 +812,55 @@ void GraphController::insertMasterMeters()
 {
     inputMeter  = nullptr;
     outputMeter = nullptr;
+    outputMeters.clear();
 
-    const auto itIn  = uidToNodeId.find (document.getIoNodeUid (true));
-    const auto itOut = uidToNodeId.find (document.getIoNodeUid (false));
+    const auto itIn = uidToNodeId.find (document.getIoNodeUid (true));
+    const String mainUid = document.getIoNodeUid (false);
 
-    // Output meter first: measures exactly what reaches the audio output.
-    if (itOut != uidToNodeId.end())
+    // One guard + meter in front of every OUT that is wired: measures exactly what reaches that pair.
+    // The main OUT always gets them (as before v1.2); an extra OUT only while something feeds it, so an
+    // unused OUT costs nothing. An OUT whose pair is inactive is left unwired and gets neither.
+    for (const auto& outUid : document.getOutputUids())
     {
-        outputMeter = spliceMeterBefore (itOut->second);
+        const auto itOut = uidToNodeId.find (outUid);
+        const int base = getOutputBase (outUid);
+        if (itOut == uidToNodeId.end() || base < 0)
+            continue;
+
+        const bool isMain = outUid == mainUid;
+        if (! isMain)
+        {
+            bool fed = false;
+            for (const auto& c : graph.getConnections())
+                fed = fed || c.destination.nodeID == itOut->second;
+            if (! fed)
+                continue;
+        }
+
+        auto* meter = spliceMeterBefore (itOut->second, base);
+        if (meter == nullptr)
+        {
+            // Can't happen short of an allocation failure; but this OUT's edges are still on its relative
+            // channels 0/1 and would alias onto the first pair, so cut them: silent beats misrouted.
+            jassertfalse;
+            for (const auto& c : graph.getConnections())
+                if (c.destination.nodeID == itOut->second)
+                    disconnectBatched (c);
+            continue;
+        }
+
+        outputMeters[outUid] = meter;
+        if (isMain)
+            outputMeter = meter;
 
         // Safety limiter goes in front of the output meter, so the meter shows what
         // actually reaches the device: ... -> guard -> meter -> audioOut.
-        if (outputMeter != nullptr)
-            for (auto* n : graph.getNodes())
-                if (n->getProcessor() == outputMeter)
-                {
-                    spliceGuardBefore (n->nodeID);
-                    break;
-                }
+        for (auto* n : graph.getNodes())
+            if (n->getProcessor() == meter)
+            {
+                spliceGuardBefore (n->nodeID);
+                break;
+            }
     }
 
     // Input meter: measures the dry signal leaving the audio input.
@@ -574,7 +870,7 @@ void GraphController::insertMasterMeters()
 
 // Redirect every X -> target connection through a new node: X -> node -> target.
 template <typename Proc>
-AudioProcessorGraph::Node* GraphController::spliceProcBefore (AudioProcessorGraph::NodeID target)
+AudioProcessorGraph::Node* GraphController::spliceProcBefore (AudioProcessorGraph::NodeID target, int targetBaseChannel)
 {
     auto node = addNodeBatched (std::make_unique<Proc>());
     if (node == nullptr)
@@ -592,14 +888,14 @@ AudioProcessorGraph::Node* GraphController::spliceProcBefore (AudioProcessorGrap
     }
 
     for (int ch = 0; ch < MeterTap::numChannels; ++ch)
-        connectBatched ({ { nodeId, ch }, { target, ch } });
+        connectBatched ({ { nodeId, ch }, { target, targetBaseChannel + ch } });
 
     return node.get();
 }
 
-MeterProcessor* GraphController::spliceMeterBefore (AudioProcessorGraph::NodeID target)
+MeterProcessor* GraphController::spliceMeterBefore (AudioProcessorGraph::NodeID target, int targetBaseChannel)
 {
-    auto* node = spliceProcBefore<MeterProcessor> (target);
+    auto* node = spliceProcBefore<MeterProcessor> (target, targetBaseChannel);
     return node != nullptr ? dynamic_cast<MeterProcessor*> (node->getProcessor()) : nullptr;
 }
 
@@ -692,6 +988,109 @@ const MeterTap* GraphController::getOutputMeter() const noexcept
     return outputMeter != nullptr ? &outputMeter->getTap() : nullptr;
 }
 
+const MeterTap* GraphController::getOutputMeter (const String& outUid) const noexcept
+{
+    const auto it = outputMeters.find (outUid);
+    return it != outputMeters.end() && it->second != nullptr ? &it->second->getTap() : nullptr;
+}
+
+//==============================================================================
+// Output nodes bound to device channel pairs (v1.2 B).
+
+int GraphController::getOutputBase (const String& outUid) const
+{
+    if (document.getNodeByUid (outUid).getProperty ("type").toString() != GraphDocument::typeAudioOut)
+        return 0;
+
+    lighthost::outputs::Binding b;
+    b.outCh      = document.getOutputChannel (outUid);
+    b.bound      = b.outCh >= 0;
+    b.outDevice  = document.getOutputDevice (outUid);
+    b.isMain     = document.isMainOutput (outUid);
+    return lighthost::outputs::outputBase (b, outputLayout);
+}
+
+std::map<String, int> GraphController::outputBases() const
+{
+    std::map<String, int> bases;
+    for (const auto& uid : document.getOutputUids())
+        bases[uid] = getOutputBase (uid);
+    return bases;
+}
+
+void GraphController::rewireIfOutputsMoved (const std::map<String, int>& before)
+{
+    if (! uidToNodeId.empty() && outputBases() != before)
+        rewireConnections();   // one publish; plugins untouched
+}
+
+bool GraphController::setOutputLayout (const lighthost::outputs::Layout& layout)
+{
+    if (layout == outputLayout)
+        return false;
+
+    const auto before = outputBases();
+    outputLayout = layout;
+    pinTargetNow = lighthost::outputs::pinTarget (layout);
+    rewireIfOutputsMoved (before);
+    return true;
+}
+
+bool GraphController::pinLegacyOutputs (const lighthost::outputs::PinTarget& target)
+{
+    const auto before = outputBases();
+    const bool changed = document.pinLegacyOutputs (target.outCh, target.label, target.device);
+    if (changed)
+        rewireIfOutputsMoved (before);
+    return changed;
+}
+
+bool GraphController::repairOutputs()
+{
+    if (! outputLayout.known || outputLayout.names.isEmpty())
+        return false;
+    return document.removeInvalidOutputs (outputLayout.deviceName, outputLayout.names.size());
+}
+
+String GraphController::addOutput (int outCh)
+{
+    if (! outputLayout.known || outCh < 0 || outCh + 1 >= outputLayout.names.size())
+        return {};   // the pair must exist on the open device
+
+    // Below the lowest OUT already on the canvas.
+    const String mainUid = document.getIoNodeUid (false);
+    float x = document.getNodeX (mainUid), y = document.getNodeY (mainUid);
+    for (const auto& uid : document.getOutputUids())
+        y = jmax (y, document.getNodeY (uid));
+    y += (float) (lighthost::geometry::endpointHeight + lighthost::geometry::nodeGap);
+
+    const String uid = document.addOutputNode (outCh, lighthost::outputs::pairLabel (outputLayout.names, outCh),
+                                               outputLayout.deviceName, x, y);
+    registerIoNode (document.getNodeByUid (uid));
+    rewireConnections();   // the one publish for this gesture
+    return uid;
+}
+
+void GraphController::setOutputBinding (const String& outUid, int outCh)
+{
+    if (! outputLayout.known || outCh < 0 || outCh + 1 >= outputLayout.names.size()
+        || (document.getOutputChannel (outUid) == outCh && document.getOutputDevice (outUid) == outputLayout.deviceName))
+        return;
+    if (document.getNodeByUid (outUid).getProperty ("type").toString() != GraphDocument::typeAudioOut)
+        return;
+
+    document.setOutputBinding (outUid, outCh, lighthost::outputs::pairLabel (outputLayout.names, outCh), outputLayout.deviceName);
+    rewireConnections();   // the one publish for this gesture
+}
+
+String GraphController::getOutputDisplayLabel (const String& outUid) const
+{
+    const String stored = document.getOutputLabel (outUid);
+    if (stored.isNotEmpty())
+        return stored;
+    return pinTargetNow.has_value() ? pinTargetNow->label : String();
+}
+
 //==============================================================================
 // Per-node channel strips (M4). Like the master meters, strips are runtime nodes
 // spliced into the live graph after the document is built; the plugin instance
@@ -716,7 +1115,8 @@ void GraphController::insertNodeStrips()
             continue;   // no live node at all (registration failed); a missing plugin's
                         // PassThrough stand-in IS live and gets a strip like any plugin
 
-        auto* stripNode = spliceStripAfter (it->second, document.getGain (uid), document.getPan (uid));
+        auto* stripNode = spliceStripAfter (it->second, document.getGain (uid), document.getPan (uid),
+                                            document.isSourceNode (uid) ? uid : String());
         if (stripNode == nullptr)
             continue;
 
@@ -725,7 +1125,7 @@ void GraphController::insertNodeStrips()
 
         // Dry/wet: the parallel dry branch exists only while the node is not fully
         // wet, so a default graph (every mix == 1) keeps the plain topology.
-        const float mix = document.getMix (uid);
+        const float mix = document.getMix (uid);   // always 1 for an instrument
         if (mix < 1.0f)
             insertMixNode (it->second, stripNode->nodeID, uid, mix);
     }
@@ -733,7 +1133,8 @@ void GraphController::insertNodeStrips()
 
 // source -> strip -> (old destinations of source). Mirrors spliceMeterAfter but
 // carries the node's gain/pan. Returns the live strip node (for the mix splice).
-AudioProcessorGraph::Node* GraphController::spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan)
+AudioProcessorGraph::Node* GraphController::spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan,
+                                                              const String& monoSourceUid)
 {
     auto stripNode = addNodeBatched (std::make_unique<NodeStripProcessor>());
     if (stripNode == nullptr)
@@ -752,6 +1153,27 @@ AudioProcessorGraph::Node* GraphController::spliceStripAfter (AudioProcessorGrap
 
     for (int ch = 0; ch < MeterTap::numChannels; ++ch)
         connectBatched ({ { source, ch }, { stripId, ch } });
+
+    // A synth that only offers one output channel feeds both strip channels (no extra node), and its
+    // cable's second channel (illegal on the synth itself) leaves from the strip's channel 1 instead.
+    // An effect that stayed mono keeps today's behaviour.
+    if (monoSourceUid.isNotEmpty())
+        if (auto* n = graph.getNodeForId (source))
+            if (n->getProcessor()->getTotalNumOutputChannels() == 1)
+            {
+                connectBatched ({ { source, 0 }, { stripId, 1 } });
+
+                ValueTree docEdges = document.getConnections();
+                for (int i = 0; i < docEdges.getNumChildren(); ++i)
+                {
+                    ValueTree e = docEdges.getChild (i);
+                    if (e.getProperty ("srcUid").toString() != monoSourceUid || (int) e.getProperty ("srcCh") != 1)
+                        continue;
+                    const auto dst = uidToNodeId.find (e.getProperty ("dstUid").toString());
+                    if (dst != uidToNodeId.end())
+                        connectBatched ({ { stripId, 1 }, { dst->second, (int) e.getProperty ("dstCh") } });
+                }
+            }
 
     if (auto* strip = dynamic_cast<NodeStripProcessor*> (stripNode->getProcessor()))
     {
@@ -847,6 +1269,9 @@ const MeterTap* GraphController::getNodeMeter (const String& uid) const noexcept
 
 void GraphController::setNodeMix (const String& uid, float mix)
 {
+    if (document.isSourceNode (uid))
+        return;   // an instrument has no dry signal
+
     mix = jlimit (0.0f, 1.0f, mix);
     document.setMix (uid, mix);
 
@@ -941,16 +1366,7 @@ void GraphController::rewireConnections()
     for (const auto& c : graph.getConnections())
         disconnectBatched (c);
 
-    ValueTree connections = document.getConnections();
-    for (int i = 0; i < connections.getNumChildren(); ++i)
-    {
-        ValueTree c = connections.getChild (i);
-        const auto src = uidToNodeId.find (c.getProperty ("srcUid").toString());
-        const auto dst = uidToNodeId.find (c.getProperty ("dstUid").toString());
-        if (src != uidToNodeId.end() && dst != uidToNodeId.end())
-            connectBatched ({ { src->second, (int) c.getProperty ("srcCh") },
-                                   { dst->second, (int) c.getProperty ("dstCh") } });
-    }
+    connectDocumentEdges();
 
     insertNodeStrips();
     insertMasterMeters();
@@ -1113,6 +1529,9 @@ void GraphController::loadDocument (const GraphDocument& doc)
 {
     document.state = doc.state.createCopy();   // deep copy: never share the store's tree
     GraphDocument::migrateTree (document.state);   // safety net: a v1 tree must never reach the canvas
+    repairOutputs();
+    if (pinTargetNow.has_value())
+        document.pinLegacyOutputs (pinTargetNow->outCh, pinTargetNow->label, pinTargetNow->device);
     rebuild();
 }
 

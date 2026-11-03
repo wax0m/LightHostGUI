@@ -10,6 +10,7 @@ namespace
     const Identifier idActive  ("active");
     const Identifier idVersion ("version");
     const Identifier idGraph   ("GRAPH");
+    const Identifier idShortcut ("shortcut");
 }
 
 PresetStore::PresetStore()
@@ -38,6 +39,16 @@ PresetStore PresetStore::fromXml (const String& xml)
         }
     }
     return s;
+}
+
+GraphDocument PresetStore::emptyPresetDocument()
+{
+    GraphDocument doc;   // audioIn + main audioOut
+    const auto in  = doc.getIoNodeUid (true);
+    const auto out = doc.getIoNodeUid (false);
+    doc.addConnection (in, 0, out, 0);
+    doc.addConnection (in, 1, out, 1);
+    return doc;
 }
 
 String PresetStore::toXml() const
@@ -106,10 +117,115 @@ GraphDocument PresetStore::getPresetDocument (int index) const
     return doc;
 }
 
+bool PresetStore::pinLegacyOutputs (int outCh, const String& label, const String& device)
+{
+    bool changed = false;
+    for (auto preset : state)
+    {
+        auto graph = preset.getChildWithName (idGraph);
+        if (graph.isValid() && GraphDocument::pinLegacyOutputs (graph, outCh, label, device))
+            changed = true;
+    }
+    return changed;
+}
+
+String PresetStore::uniqueCopyName (const String& base) const
+{
+    auto taken = [this] (const String& name)
+    {
+        for (int i = 0; i < getNumPresets(); ++i)
+            if (getPresetName (i).equalsIgnoreCase (name))
+                return true;
+        return false;
+    };
+
+    String candidate = base + " copy";
+    for (int n = 2; taken (candidate); ++n)
+        candidate = base + " copy " + String (n);
+    return candidate;
+}
+
+int PresetStore::duplicatePreset (int index)
+{
+    if (index < 0 || index >= getNumPresets())
+        return -1;
+
+    const int active = getActiveIndex();
+    ValueTree copy = state.getChild (index).createCopy();   // deep copy, graph included
+    copy.setProperty (idName, uniqueCopyName (getPresetName (index)), nullptr);
+    copy.removeProperty (idShortcut, nullptr);   // a combination belongs to one preset only
+    state.addChild (copy, index + 1, nullptr);
+    if (active > index)
+        state.setProperty (idActive, active + 1, nullptr);   // keep pointing at the same preset
+    return index + 1;
+}
+
 void PresetStore::removePreset (int index)
 {
     if (index < 0 || index >= getNumPresets())
         return;
+    const int active = getActiveIndex();
     state.removeChild (index, nullptr);
-    setActiveIndex ((int) state.getProperty (idActive, 0));   // re-clamp
+    // A preset removed before the active one shifts it down; removing the active one hands the slot to
+    // its successor (clamped at the end).
+    setActiveIndex (index < active ? active - 1 : active);
+}
+
+bool PresetStore::movePreset (int from, int to)
+{
+    const int n = getNumPresets();
+    if (from < 0 || from >= n || to < 0 || to >= n || from == to)
+        return false;
+
+    const int active = getActiveIndex();
+    state.moveChild (from, to, nullptr);
+    int newActive = active;
+    if (active == from)                        newActive = to;
+    else if (from < active && active <= to)    newActive = active - 1;
+    else if (to <= active && active < from)    newActive = active + 1;
+    state.setProperty (idActive, newActive, nullptr);
+    return true;
+}
+
+String PresetStore::getPresetShortcut (int index) const
+{
+    if (const auto c = lighthost::hotkeys::parse (state.getChild (index).getProperty (idShortcut).toString()); c.has_value())
+        return lighthost::hotkeys::format (*c);
+    return {};
+}
+
+int PresetStore::setPresetShortcut (int index, const lighthost::hotkeys::Combo& combo)
+{
+    auto preset = state.getChild (index);
+    if (! preset.isValid() || ! combo.hasRequiredModifier() || combo.key.isEmpty())
+        return -1;
+
+    const int previous = findPresetByShortcut (combo);
+    if (previous >= 0 && previous != index)
+        state.getChild (previous).removeProperty (idShortcut, nullptr);
+    preset.setProperty (idShortcut, lighthost::hotkeys::format (combo), nullptr);
+    return previous != index ? previous : -1;
+}
+
+void PresetStore::clearPresetShortcut (int index)
+{
+    if (auto preset = state.getChild (index); preset.isValid())
+        preset.removeProperty (idShortcut, nullptr);
+}
+
+int PresetStore::findPresetByShortcut (const lighthost::hotkeys::Combo& combo) const
+{
+    StringArray all;
+    for (int i = 0; i < getNumPresets(); ++i)
+        all.add (getPresetShortcut (i));
+    return lighthost::hotkeys::findOwner (all, combo);
+}
+
+StringArray PresetStore::registeredShortcuts() const
+{
+    StringArray out;
+    for (int i = 0; i < getNumPresets(); ++i)
+        if (const auto s = getPresetShortcut (i); s.isNotEmpty())
+            out.addIfNotAlreadyThere (s);
+    return out;
 }

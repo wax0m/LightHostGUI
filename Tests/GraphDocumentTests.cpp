@@ -19,6 +19,14 @@ int runMidiTests (int& checks);    // Tests/MidiTests.cpp
 int runPresetTests (int& checks);  // Tests/PresetTests.cpp
 int runMixTests (int& checks);     // Tests/MixTests.cpp
 int runSettingsTests (int& checks);// Tests/SettingsTests.cpp
+int runVst2StateTests (int& checks);// Tests/Vst2StateTests.cpp
+int runOutputTests (int& checks);  // Tests/OutputTests.cpp
+int runScanWorkerTests (int& checks);// Tests/ScanWorkerTests.cpp
+int runModulePinTests (int& checks);// Tests/ModulePinTests.cpp
+int runMidiInputPlanTests (int& checks);// Tests/MidiInputPlanTests.cpp
+int runSnapGuidesTests (int& checks);// Tests/SnapGuidesTests.cpp
+int runAutostartTests (int& checks);// Tests/AutostartTests.cpp
+int runHotkeyTests (int& checks);   // Tests/HotkeyTests.cpp
 
 static int failures = 0;
 static int checks   = 0;
@@ -36,6 +44,7 @@ static PluginDescription makeDesc (const String& name)
     PluginDescription d;
     d.name              = name;
     d.pluginFormatName  = "VST3";
+    d.numInputChannels  = d.numOutputChannels = 2;   // an effect: zero inputs would read as an instrument
     d.category          = "Fx";
     d.manufacturerName  = "TestCo";
     d.version           = "1.0";
@@ -265,6 +274,50 @@ int main()
                "a v2 document round-trips its px positions");
     }
 
+    // --- Replace plugin in place (document side) + legacy key ----------------------
+    {
+        PluginDescription oldDesc;
+        oldDesc.name = "TAL-Dub-3"; oldDesc.version = "V1.1.0"; oldDesc.pluginFormatName = "VST";
+        oldDesc.fileOrIdentifier = "C:/vst/TAL-Dub-3.dll"; oldDesc.uniqueId = 1234;
+        oldDesc.numInputChannels = oldDesc.numOutputChannels = 2;
+        CHECK (GraphDocument::legacyKey ("state", oldDesc) == "plugin-state-TAL-Dub-3V1.1.0VST",
+               "legacyKey reproduces the old settings key");
+
+        PluginDescription v3 = oldDesc;
+        v3.pluginFormatName = "VST3"; v3.fileOrIdentifier = "C:/vst3/TAL-Dub-3.vst3"; v3.name = "TAL-Dub-3 3";
+
+        GraphDocument rdoc;
+        const String uid = rdoc.addPluginNode (oldDesc, 100.0f, 100.0f);
+        rdoc.setGain (uid, 0.5f); rdoc.setPan (uid, -0.25f); rdoc.setMix (uid, 0.4f); rdoc.setBypassed (uid, true);
+        rdoc.setNodePosition (uid, 321.0f, 123.0f);
+        rdoc.setPluginState (uid, "ORIGINAL");
+        const int nodesBefore = rdoc.getNodes().getNumChildren();
+
+        CHECK (! rdoc.replacePlugin (rdoc.getIoNodeUid (true), v3, "X", "Y"), "replace refuses a non-plugin node");
+        CHECK (rdoc.replacePlugin (uid, v3, "NEWSTATE", "ORIGINAL"), "replace succeeds on a plugin node");
+        const auto rdesc = GraphDocument::getPluginDescription (rdoc.getNodeByUid (uid));
+        CHECK (rdesc.has_value() && rdesc->pluginFormatName == "VST3", "replace swaps the PLUGIN description");
+        CHECK (rdoc.getNodeByUid (uid).getProperty ("name").toString() == "TAL-Dub-3 3", "replace renames the node");
+        CHECK (rdoc.getPluginState (uid) == "NEWSTATE", "replace stores the new state");
+        CHECK (rdoc.getPreviousPluginState (uid) == "ORIGINAL", "replace keeps the original state in prevState");
+        CHECK (rdoc.getNodeByUid (uid).getChildWithName ("PREV_PLUGIN").getProperty ("format").toString() == "VST",
+               "replace keeps the original description as PREV_PLUGIN");
+        CHECK (rdoc.getGain (uid) == 0.5f && rdoc.getPan (uid) == -0.25f && rdoc.getMix (uid) == 0.4f && rdoc.isBypassed (uid)
+               && rdoc.getNodeX (uid) == 321.0f && rdoc.getNodeY (uid) == 123.0f,
+               "replace keeps gain / pan / mix / bypass / position");
+        CHECK (rdoc.getNodes().getNumChildren() == nodesBefore, "replace adds no node");
+
+        PluginDescription third = v3; third.name = "Other";
+        CHECK (rdoc.replacePlugin (uid, third, "NEWER", "NEWSTATE"), "second replace succeeds");
+        CHECK (rdoc.getPreviousPluginState (uid) == "ORIGINAL", "second replace keeps the first prevState");
+        CHECK (rdoc.getNodeByUid (uid).getChildWithName ("PREV_PLUGIN").getProperty ("format").toString() == "VST",
+               "second replace keeps the first PREV_PLUGIN");
+
+        const auto rt = GraphDocument::fromXml (rdoc.toXml());
+        CHECK (rt.getPreviousPluginState (uid) == "ORIGINAL" && rt.getPluginState (uid) == "NEWER",
+               "prevState / state round-trip through XML");
+    }
+
     failures += runMeterTests (checks);
     failures += runStripTests (checks);
     failures += runParamTests (checks);
@@ -273,6 +326,14 @@ int main()
     failures += runPresetTests (checks);
     failures += runMixTests (checks);
     failures += runSettingsTests (checks);
+    failures += runVst2StateTests (checks);
+    failures += runOutputTests (checks);
+    failures += runScanWorkerTests (checks);
+    failures += runModulePinTests (checks);
+    failures += runMidiInputPlanTests (checks);
+    failures += runSnapGuidesTests (checks);
+    failures += runAutostartTests (checks);
+    failures += runHotkeyTests (checks);
 
     std::cout << (failures == 0 ? "PASS " : "FAIL ")
               << (checks - failures) << '/' << checks << " checks\n";

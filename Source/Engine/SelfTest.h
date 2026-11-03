@@ -25,6 +25,13 @@
 //    Q. an explicit retry swaps a missing plugin's stand-in for the real plugin.
 //    R. exactly one output guard in the live graph; corrupt persisted gain is clamped.
 //    S. an unreadable saved graph is backed up and reported, never silently overwritten.
+//    T. replacing a plugin in place keeps wiring and strip, imports a VST2 state, publishes once.
+//    U. instrument nodes: a 0-input synth is a source beside the chain, wired to OUT, MIDI on (fake processors; a real VST3 instrument when found).
+//    V. two OUTs on the real graph (a real effect fans out to a main and an extra pair).
+//    W. output nodes bound to device channel pairs: strict bindings, inactive pairs, legacy pinning, other device (fake processors).
+//    X. plugin scan in a child process: a good file scans, a worker that dies / hangs blacklists that file only, a hung test load does not.
+//    Y. a module the user has used stays mapped: a pinned DLL survives FreeLibrary, a plugin instantiated by the controller is pinned.
+//    Z. load guard + suspended plugins: the guard file is gone after every gesture, a suspended file loads as a stand-in everywhere until a retry works.
 //
 //  Used by both the LightHostRuntimeTests console target and the shipping app's
 //  `-run-selftest` command-line switch, so CI can verify the real binary.

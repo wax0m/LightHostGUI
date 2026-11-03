@@ -15,6 +15,12 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
     if (format.isEmpty())
         format = missing ? "missing" : "VST3";
 
+    // An instrument is a source: no dry/wet mix, and the badge says so. The document decides, so a
+    // missing instrument still reads as one.
+    isSource = controller.document.isSourceNode (uid);
+    if (isSource)
+        format = "instrument " + juce::String (juce::CharPointer_UTF8 ("\xc2\xb7")) + " " + format;
+
     // MIDI toggle: only for a live plugin that accepts MIDI. Reflects the
     // document's per-node receivesMidi flag (default on).
     showMidi = ! missing && controller.nodeAcceptsMidi (uid);
@@ -41,7 +47,7 @@ NodeCard::NodeCard (GraphController& c, GraphController::ChainItem item)
     else
         setupGainPanKnobs();
 
-    if (! missing)
+    if (! missing && ! isSource)
         setupMixKnob();
 
     applyBypassLook();
@@ -192,7 +198,10 @@ void NodeCard::updateNameTooltip()
     const int switchesLeft = showMidi ? midiRect.getX() : bypassRect.getX();
     const float titleWidth = (float) (switchesLeft - statusDotRect.getRight() - 14);
     const bool cut = juce::GlyphArrangement::getStringWidth (LightHostLookAndFeel::display (13.5f, true), name) > titleWidth;
-    setTooltip (cut ? name : juce::String());
+    if (missing)
+        setTooltip (name + "\nUnavailable: double-click to retry, right-click to replace it with another plugin.");
+    else
+        setTooltip (cut ? name : juce::String());
 }
 
 void NodeCard::resized()
@@ -373,6 +382,11 @@ void NodeCard::mouseDown (const juce::MouseEvent& e)
         return;
     if (auto* parent = getParentComponent())
         parent->grabKeyboardFocus();   // so Delete / Ctrl +,-,0 reach the canvas after a card click
+    if (e.mods.isPopupMenu())
+    {
+        if (onContextMenu) onContextMenu (uid);
+        return;
+    }
     if (bypassRect.contains (e.getPosition()))
     {
         bypassed = ! bypassed;

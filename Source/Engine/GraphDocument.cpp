@@ -21,6 +21,11 @@ namespace
     const Identifier idY           ("y");
     const Identifier idBypassed    ("bypassed");
     const Identifier idState       ("state");
+    const Identifier idPrevState   ("prevState");
+    const Identifier idOutCh       ("outCh");
+    const Identifier idOutLabel    ("outLabel");
+    const Identifier idOutDevice   ("outDevice");
+    const Identifier idMain        ("main");
     const Identifier idGain        ("gain");
     const Identifier idPan         ("pan");
     const Identifier idMidi        ("midi");
@@ -43,7 +48,8 @@ GraphDocument::GraphDocument()
     state.appendChild (ValueTree (idConnections), nullptr);
 
     addNodeInternal (typeAudioIn,  "Audio Input",  lighthost::geometry::defaultInX,  lighthost::geometry::defaultY);
-    addNodeInternal (typeAudioOut, "Audio Output", lighthost::geometry::defaultOutX, lighthost::geometry::defaultY);
+    const String outUid = addNodeInternal (typeAudioOut, "Audio Output", lighthost::geometry::defaultOutX, lighthost::geometry::defaultY);
+    getNodeByUid (outUid).setProperty (idMain, true, nullptr);
 }
 
 GraphDocument GraphDocument::fromXml (const String& xml)
@@ -121,9 +127,119 @@ ValueTree GraphDocument::getConnections() const  { return state.getChildWithName
 
 String GraphDocument::getIoNodeUid (bool input) const
 {
-    ValueTree node = state.getChildWithName (idNodes)
-                          .getChildWithProperty (idType, input ? typeAudioIn : typeAudioOut);
-    return node.getProperty (idUid).toString();
+    ValueTree nodes = state.getChildWithName (idNodes);
+    if (! input)
+    {
+        String first;
+        for (int i = 0; i < nodes.getNumChildren(); ++i)
+        {
+            ValueTree n = nodes.getChild (i);
+            if (n.getProperty (idType).toString() != typeAudioOut)
+                continue;
+            if ((bool) n.getProperty (idMain, false))
+                return n.getProperty (idUid).toString();
+            if (first.isEmpty())
+                first = n.getProperty (idUid).toString();
+        }
+        return first;   // documents from before v1.2 have no main flag: the first OUT is the main one
+    }
+
+    return nodes.getChildWithProperty (idType, typeAudioIn).getProperty (idUid).toString();
+}
+
+String GraphDocument::addOutputNode (int outCh, const String& label, const String& device, float x, float y)
+{
+    const String uid = addNodeInternal (typeAudioOut, "Audio Output", x, y);
+    setOutputBinding (uid, outCh, label, device);
+    return uid;
+}
+
+std::vector<String> GraphDocument::getOutputUids() const
+{
+    std::vector<String> out;
+    ValueTree nodes = state.getChildWithName (idNodes);
+    for (int i = 0; i < nodes.getNumChildren(); ++i)
+        if (nodes.getChild (i).getProperty (idType).toString() == typeAudioOut)
+            out.push_back (nodes.getChild (i).getProperty (idUid).toString());
+    return out;
+}
+
+bool GraphDocument::isMainOutput (const String& uid) const
+{
+    return uid.isNotEmpty() && uid == getIoNodeUid (false);
+}
+
+void GraphDocument::setOutputBinding (const String& uid, int outCh, const String& label, const String& device)
+{
+    ValueTree n = getNodeByUid (uid);
+    if (! n.isValid() || n.getProperty (idType).toString() != typeAudioOut)
+        return;
+    n.setProperty (idOutCh, jmax (0, outCh), nullptr);
+    n.setProperty (idOutLabel, label, nullptr);
+    n.setProperty (idOutDevice, device, nullptr);
+}
+
+int GraphDocument::getOutputChannel (const String& uid) const
+{
+    ValueTree n = getNodeByUid (uid);
+    return n.hasProperty (idOutCh) ? jmax (0, (int) n.getProperty (idOutCh)) : -1;
+}
+
+String GraphDocument::getOutputLabel (const String& uid) const  { return getNodeByUid (uid).getProperty (idOutLabel).toString(); }
+String GraphDocument::getOutputDevice (const String& uid) const { return getNodeByUid (uid).getProperty (idOutDevice).toString(); }
+
+bool GraphDocument::removeInvalidOutputs (const String& device, int numChannels)
+{
+    bool removed = false;
+    for (const auto& uid : getOutputUids())
+    {
+        if (isMainOutput (uid))
+            continue;
+        const int ch = getOutputChannel (uid);
+        if (ch < 0)
+            continue;
+
+        const String boundTo = getOutputDevice (uid);
+        const bool onThisDevice = boundTo.isEmpty() || boundTo == device;
+        if (ch + 1 >= maxOutputChannels || (onThisDevice && ch + 1 >= numChannels))
+        {
+            removeNode (uid);   // also drops its cables
+            removed = true;
+        }
+    }
+    return removed;
+}
+
+bool GraphDocument::pinLegacyOutputs (ValueTree& graph, int outCh, const String& label, const String& device)
+{
+    ValueTree nodes = graph.getChildWithName (idNodes);
+    bool changed = false, hasMain = false;
+    ValueTree firstOut;
+
+    for (int i = 0; i < nodes.getNumChildren(); ++i)
+    {
+        ValueTree n = nodes.getChild (i);
+        if (n.getProperty (idType).toString() != typeAudioOut)
+            continue;
+        if (! firstOut.isValid())
+            firstOut = n;
+        hasMain = hasMain || (bool) n.getProperty (idMain, false);
+
+        if (! n.hasProperty (idOutCh))
+        {
+            n.setProperty (idOutCh, jmax (0, outCh), nullptr);
+            n.setProperty (idOutLabel, label, nullptr);
+            n.setProperty (idOutDevice, device, nullptr);
+            changed = true;
+        }
+    }
+
+    if (! hasMain && firstOut.isValid())
+    {
+        firstOut.setProperty (idMain, true, nullptr);
+        changed = true;
+    }
+    return changed;
 }
 
 void GraphDocument::setBypassed (const String& uid, bool b)
@@ -183,11 +299,15 @@ bool GraphDocument::getReceivesMidi (const String& uid) const
 
 void GraphDocument::setMix (const String& uid, float mix)
 {
+    if (isSourceNode (uid))
+        return;   // no dry signal to blend with
     getNodeByUid (uid).setProperty (idMix, sanitise (mix, 0.0f, 1.0f, 1.0f), nullptr);
 }
 
 float GraphDocument::getMix (const String& uid) const
 {
+    if (isSourceNode (uid))
+        return 1.0f;
     return sanitise ((float) getNodeByUid (uid).getProperty (idMix, 1.0f), 0.0f, 1.0f, 1.0f);
 }
 
@@ -211,6 +331,41 @@ std::optional<PluginDescription> GraphDocument::getPluginDescription (const Valu
             return desc;
     }
     return std::nullopt;
+}
+
+bool GraphDocument::replacePlugin (const String& uid, const PluginDescription& newDesc,
+                                   const String& newStateBase64, const String& originalStateBase64)
+{
+    ValueTree node = getNodeByUid (uid);
+    if (! node.isValid() || node.getProperty (idType).toString() != typePlugin)
+        return false;
+
+    ValueTree old = node.getChildWithName ("PLUGIN");
+    if (! node.getChildWithName ("PREV_PLUGIN").isValid() && old.isValid())
+    {
+        // First replace: keep the original so a later replace can never lose it.
+        if (auto oldXml = old.createXml())
+        {
+            oldXml->setTagName ("PREV_PLUGIN");
+            node.appendChild (ValueTree::fromXml (*oldXml), nullptr);
+        }
+        if (originalStateBase64.isNotEmpty())
+            node.setProperty (idPrevState, originalStateBase64, nullptr);
+    }
+
+    if (old.isValid())
+        node.removeChild (old, nullptr);
+    if (auto descXml = newDesc.createXml())
+        node.appendChild (ValueTree::fromXml (*descXml), nullptr);
+
+    node.setProperty (idName, newDesc.name, nullptr);
+    node.setProperty (idState, newStateBase64, nullptr);
+    return true;
+}
+
+String GraphDocument::getPreviousPluginState (const String& uid) const
+{
+    return getNodeByUid (uid).getProperty (idPrevState).toString();
 }
 
 //==============================================================================
@@ -330,6 +485,7 @@ bool GraphDocument::canAddConnection (const String& srcUid, int srcCh, const Str
 
     if (srcNode.getProperty (idType).toString() == typeAudioOut) return false;   // output is a sink
     if (dstNode.getProperty (idType).toString() == typeAudioIn)  return false;   // input is a source
+    if (isSourceNode (dstUid))                                   return false;   // an instrument has no input
 
     if (hasConnection (srcUid, srcCh, dstUid, dstCh)) return false;              // duplicate
     if (pathExists (dstUid, srcUid))                 return false;              // would create a cycle
@@ -507,6 +663,11 @@ bool GraphDocument::migrateTree (ValueTree& graph)
     return true;
 }
 
+String GraphDocument::legacyKey (const String& type, const PluginDescription& p)
+{
+    return "plugin-" + type + "-" + p.name + p.version + p.pluginFormatName;
+}
+
 //==============================================================================
 GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings)
 {
@@ -516,15 +677,10 @@ GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings
     if (auto xml = settings.getXmlValue ("pluginListActive"))
         legacyActive.recreateFromXml (*xml);
 
-    const auto legacyKey = [] (const String& type, const PluginDescription& p)
-    {
-        return "plugin-" + type + "-" + p.name + p.version + p.pluginFormatName;
-    };
-
     const auto types = legacyActive.getTypes();
     std::vector<std::pair<int, PluginDescription>> ordered;
     for (const auto& p : types)
-        ordered.push_back ({ settings.getValue (legacyKey ("order", p)).getIntValue(), p });
+        ordered.push_back ({ settings.getValue (GraphDocument::legacyKey ("order", p)).getIntValue(), p });
     std::sort (ordered.begin(), ordered.end(),
                [] (const auto& a, const auto& b) { return a.first < b.first; });
 
@@ -536,8 +692,8 @@ GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings
         ignoreUnused (orderTime);
         const float x = lighthost::geometry::defaultInX + (float) ((index + 1) * lighthost::geometry::nodeSlot);
         const String uid = doc.addPluginNode (plugin, x, lighthost::geometry::defaultY);
-        doc.setBypassed (uid, settings.getBoolValue (legacyKey ("bypass", plugin), false));
-        const String stateB64 = settings.getValue (legacyKey ("state", plugin));
+        doc.setBypassed (uid, settings.getBoolValue (GraphDocument::legacyKey ("bypass", plugin), false));
+        const String stateB64 = settings.getValue (GraphDocument::legacyKey ("state", plugin));
         if (stateB64.isNotEmpty())
             doc.setPluginState (uid, stateB64);
         chain.push_back (uid);
@@ -558,15 +714,63 @@ GraphDocument GraphDocument::migrateFromLegacySettings (PropertiesFile& settings
 }
 
 //==============================================================================
+bool GraphDocument::isSourceDescription (const PluginDescription& d)
+{
+    return d.isInstrument || d.numInputChannels == 0;
+}
+
+bool GraphDocument::isSourceNode (const String& uid) const
+{
+    const ValueTree node = getNodeByUid (uid);
+    if (! node.isValid() || node.getProperty (idType).toString() != typePlugin)
+        return false;
+
+    const ValueTree plugin = node.getChildWithName ("PLUGIN");
+    if (! plugin.isValid())
+        return false;
+
+    return (bool) plugin.getProperty ("isInstrument", false)
+        || (plugin.hasProperty ("numInputs") && (int) plugin.getProperty ("numInputs") == 0);
+}
+
+std::set<String> GraphDocument::getSideNodes() const
+{
+    std::set<String> side;
+    ValueTree nodes = state.getChildWithName (idNodes);
+    ValueTree conns = state.getChildWithName (idConnections);
+
+    for (int i = 0; i < nodes.getNumChildren(); ++i)
+    {
+        const String uid = nodes.getChild (i).getProperty (idUid).toString();
+        if (! isSourceNode (uid))
+            continue;
+
+        bool onlyToOutputs = true;
+        for (int c = 0; c < conns.getNumChildren() && onlyToOutputs; ++c)
+        {
+            ValueTree edge = conns.getChild (c);
+            if (edge.getProperty (idSrcUid).toString() == uid
+                && getNodeByUid (edge.getProperty (idDstUid).toString()).getProperty (idType).toString() != typeAudioOut)
+                onlyToOutputs = false;
+        }
+        if (onlyToOutputs)
+            side.insert (uid);
+    }
+    return side;
+}
+
 bool GraphDocument::isLinearChain() const
 {
     const String in  = getIoNodeUid (true);
     const String out = getIoNodeUid (false);
 
+    const std::set<String> side = getSideNodes();   // instruments beside the chain don't count
+
     ValueTree nodes = state.getChildWithName (idNodes);
     int pluginCount = 0;
     for (int i = 0; i < nodes.getNumChildren(); ++i)
-        if (nodes.getChild (i).getProperty (idType).toString() == typePlugin)
+        if (nodes.getChild (i).getProperty (idType).toString() == typePlugin
+            && side.count (nodes.getChild (i).getProperty (idUid).toString()) == 0)
             ++pluginCount;
 
     // Node-level distinct edges (dedupe the two stereo channels of each hop).
@@ -575,7 +779,9 @@ bool GraphDocument::isLinearChain() const
     for (int i = 0; i < conns.getNumChildren(); ++i)
     {
         ValueTree c = conns.getChild (i);
-        edges.insert ({ c.getProperty (idSrcUid).toString(), c.getProperty (idDstUid).toString() });
+        const String src = c.getProperty (idSrcUid).toString();
+        if (side.count (src) == 0)
+            edges.insert ({ src, c.getProperty (idDstUid).toString() });
     }
 
     // Empty chain (no plugins): linear if there are no edges, or just in -> out.

@@ -18,11 +18,13 @@
 #include "MeterProcessor.h"
 #include "NodeStripProcessor.h"
 #include "PluginParameters.h"
+#include "OutputPairs.h"
 #include "PassThroughProcessor.h"
 #include "PluginBuses.h"
 #include "MonoInputProcessor.h"
 #include "MixProcessor.h"
 #include "OutputGuardProcessor.h"
+#include "LoadGuard.h"
 
 class GraphController
 {
@@ -43,6 +45,7 @@ public:
     // Non-empty when the last loadFrom() found an unreadable saved graph: a copy was kept
     // (see SettingsBackup.h) and the controller started from defaults.
     String getLoadWarning() const { return loadWarning; }
+    bool didFixOnLoad() const noexcept { return fixedOnLoad; }   // loadFrom() pinned / repaired the saved graph's OUTs for the open device
     bool didMigrateOnLoad() const noexcept { return migratedOnLoad; }   // loadFrom() read a v1 (normalised) graph
 
     //==============================================================================
@@ -54,6 +57,7 @@ public:
     String addPlugin (const PluginDescription&);       // returns new node uid, "" on failure
     String appendToChain (const PluginDescription&);   // serial add (linear chains)
     String addNodeUnconnected (const PluginDescription&);   // no connections touched
+    String addSourcePlugin (const PluginDescription&);      // instrument: beside the chain, wired to the main OUT
     // Remove ONE node and heal around it (bridge each upstream edge to each
     // downstream edge with channel continuity). No other edge is touched and no
     // plugin is reloaded, so branched routing and live instances survive a delete.
@@ -79,14 +83,48 @@ public:
     // instances untouched) with ONE publish; on failure nothing changes or publishes.
     int  getNumMissingPlugins() const noexcept { return (int) missingPlugins.size(); }
     bool retryMissingPlugin (const String& uid);   // true when the plugin is live again
-    int  retryMissingPlugins();                     // number recovered; one publish for all
+    int  retryMissingPlugins();                     // number recovered; one publish for all; skips suspended files
+
+    // Replace a plugin node's implementation in place: same uid, wiring, strip, position, bypass,
+    // gain/pan/mix and MIDI flag. A saved VST2 state (fxb/fxp) on the node, or in `fallbackState`
+    // when the node has none, is imported into the new VST3 on the fresh instance before it enters
+    // the graph. Works on stand-ins and on live plugins (then without import). The original
+    // description and state are kept once in the document (PREV_PLUGIN / prevState).
+    // If the new plugin can't load: !ok, nothing changes, nothing publishes. Otherwise exactly one publish.
+    struct ReplaceResult
+    {
+        enum class Import { none, fullStream, bareChunk, paramsByIndex };
+        bool ok = false;
+        Import import = Import::none;
+        int changedParams = 0;
+        String message;   // one line for the UI
+    };
+    ReplaceResult replacePlugin (const String& uid, const PluginDescription& newDesc,
+                                 const MemoryBlock* fallbackState = nullptr);
 
     //==============================================================================
     // Master meter taps for the GUI (message-thread reads). Null until the first
     // rebuild, or if the corresponding IO node is absent. Meters are spliced into
     // the live graph only — they are never stored in the GraphDocument.
     const MeterTap* getInputMeter()  const noexcept;
-    const MeterTap* getOutputMeter() const noexcept;
+    const MeterTap* getOutputMeter() const noexcept;                       // the main OUT
+    const MeterTap* getOutputMeter (const String& outUid) const noexcept;  // any OUT that currently has one
+
+    //==============================================================================
+    // Output nodes bound to device channel pairs (v1.2 B). The device tells the controller which output
+    // channels are active (names too); each audioOut node feeds the pair its binding names, resolved at
+    // rewire time (never per block). A binding belongs to the device it was made on: on another device
+    // the main OUT falls back to the first active pair and extra OUTs stay silent (see OutputPairs.h).
+    // A layout change that moves some OUT rewires once (one publish); no plugin is reloaded.
+    bool setOutputLayout (const lighthost::outputs::Layout&);   // true if the layout differed from the stored one
+    const lighthost::outputs::Layout& getOutputLayout() const noexcept { return outputLayout; }
+    // Stamp OUT nodes without a binding with the target (document only; the wiring doesn't change for the main OUT).
+    bool pinLegacyOutputs (const lighthost::outputs::PinTarget&);
+    String addOutput (int outCh);                       // a new extra OUT bound to the pair; "" without a device
+    void   setOutputBinding (const String& outUid, int outCh);   // rebind (one rewire)
+    int    getOutputBase (const String& outUid) const;  // graph output channel its pair lands on, -1 = inactive (silent)
+    bool   isOutputActive (const String& outUid) const { return getOutputBase (outUid) >= 0; }
+    String getOutputDisplayLabel (const String& outUid) const;
 
     //==============================================================================
     // Per-node channel strip (M4): output gain + stereo balance, plus the node's
@@ -159,6 +197,25 @@ public:
 
     GraphDocument document;
 
+    // Load guard (see LoadGuard.h). The guard file is written before every main-process instantiation and
+    // removed when the gesture that caused it has finished. Plugin files on the suspended list are never
+    // instantiated (their nodes are stand-ins, in every preset) until an explicit retry succeeds; that
+    // removes the file from the list and calls onSuspendedChanged so the owner can persist it.
+    void setLoadGuardFile (const File& f) { loadGuardFile = f; }
+    void setSuspendedFiles (const StringArray& files) { suspendedFiles = files; }
+    const StringArray& getSuspendedFiles() const noexcept { return suspendedFiles; }
+    bool isSuspendedFile (const String& pluginFile) const { return lighthost::guard::isSuspended (suspendedFiles, pluginFile); }
+    std::function<void()> onSuspendedChanged;
+
+    // Safe mode: no plugin is instantiated at all (every plugin node, added, retried or replaced, is a
+    // stand-in); saved states stay in the document. Set before the first load.
+    void setSafeMode (bool on) noexcept { safeMode = on; }
+    bool isSafeMode() const noexcept { return safeMode; }
+
+    // Test seam: when set, plugin instances come from here instead of the format manager
+    // (a null result is a plugin that can't load). Production code never sets it.
+    std::function<std::unique_ptr<AudioProcessor> (const PluginDescription&)> instanceFactory;
+
 private:
     // Batched graph mutation: the ONLY callers of graph.addNode/removeNode/addConnection/
     // removeConnection/clear. They use UpdateKind::none; publishTopology() sends the result
@@ -174,15 +231,20 @@ private:
     void rebuild();                          // document -> live graph (reentrancy-safe wrapper)
     void rebuildNow();                       // the actual teardown/build pass
     void rewireConnections();                // re-wire live graph from doc WITHOUT reloading plugins
+    void connectDocumentEdges();             // doc connections -> live graph edges (shared by rebuild and rewire)
     void captureStates();                    // live plugin states -> document
     std::vector<String> getChainUids() const;            // audioIn .. audioOut, doc order
     void rewriteChainConnections (const std::vector<String>& chainUids);
-    String addPluginNodeAtNextSlot (const PluginDescription&);   // document node only, placed by placeNewPlugin
+    // The ONE place a new plugin's document node is made (placement + initial MIDI flag), shared by
+    // appendToChain, addNodeUnconnected and addSourcePlugin: instruments receive MIDI, new effects don't
+    // (so playing a piano can't steer a pitch corrector). Existing documents keep their flags.
+    String addPluginNodeAtNextSlot (const PluginDescription&);
     // Instantiate ONE plugin document node into the live graph (PassThrough stand-in
     // + missingPlugins entry when the plugin can't load) and register it in
     // uidToNodeId. Shared by rebuildNow and the incremental add paths.
     AudioProcessorGraph::Node* addPluginNodeToGraph (const ValueTree& nodeTree);
     std::unique_ptr<AudioProcessor> createPluginInstanceFor (const ValueTree& nodeTree);   // nullptr if it can't load
+    std::unique_ptr<AudioProcessor> createInstanceFrom (const PluginDescription&);        // stereo-forced, default state; nullptr if it can't load
     AudioProcessorGraph::Node* registerPluginNode (const ValueTree& nodeTree, std::unique_ptr<AudioProcessor> instance);
     // Teardown mirror of addPluginNodeToGraph: every per-uid runtime map is cleaned here.
     void removePluginNodeFromGraph (const String& uid);
@@ -190,16 +252,17 @@ private:
 
     // Meter plumbing (runtime only).
     void insertMasterMeters();
-    MeterProcessor* spliceMeterBefore (AudioProcessorGraph::NodeID target);
+    MeterProcessor* spliceMeterBefore (AudioProcessorGraph::NodeID target, int targetBaseChannel = 0);
     OutputGuardProcessor* spliceGuardBefore (AudioProcessorGraph::NodeID target);
     // Shared body: redirect every X -> target connection through a new Proc node.
     template <typename Proc>
-    AudioProcessorGraph::Node* spliceProcBefore (AudioProcessorGraph::NodeID target);
+    AudioProcessorGraph::Node* spliceProcBefore (AudioProcessorGraph::NodeID target, int targetBaseChannel = 0);
     MeterProcessor* spliceMeterAfter  (AudioProcessorGraph::NodeID source);
 
     void insertNodeStrips();
     void insertMidiRouting();
-    AudioProcessorGraph::Node* spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan);
+    AudioProcessorGraph::Node* spliceStripAfter (AudioProcessorGraph::NodeID source, float gain, float pan,
+                                                 const String& monoSourceUid = {});
     // Splice a dry/wet mix node between a plugin and its strip: plugin -> mix(wet) -> strip,
     // with the plugin's own input sources tapped in parallel into mix's dry inputs.
     void insertMixNode (AudioProcessorGraph::NodeID pluginId, AudioProcessorGraph::NodeID stripId,
@@ -211,6 +274,14 @@ private:
     AudioProcessorGraph& graph;
     AudioPluginFormatManager& formatManager;
     std::map<String, AudioProcessorGraph::NodeID> uidToNodeId;
+    lighthost::outputs::Layout outputLayout;
+    std::optional<lighthost::outputs::PinTarget> pinTargetNow;   // first active pair of the open device
+    std::map<String, MeterProcessor*> outputMeters;              // per OUT that has a guard + meter in front of it
+    std::map<String, int> outputBases() const;
+    void rewireIfOutputsMoved (const std::map<String, int>& before);
+    void registerIoNode (const ValueTree& nodeTree);             // an audioIn/audioOut document node -> live IO node
+    bool fixedOnLoad = false;
+    bool repairOutputs();   // drop impossible extra OUTs (see GraphDocument::removeInvalidOutputs); needs a known layout
     std::set<String> missingPlugins;   // plugin nodes running as pass-through (failed to load)
     MeterProcessor* inputMeter  = nullptr;   // owned by the graph node, not us
     MeterProcessor* outputMeter = nullptr;
@@ -224,6 +295,18 @@ private:
     bool migratedOnLoad = false;
     bool rebuilding = false;
     bool rebuildPending = false;
+
+    File loadGuardFile;
+    StringArray suspendedFiles;
+    bool safeMode = false;
+    bool explicitRetry = false;   // true only inside a user-requested retry: suspension is lifted for it
+    int guardDepth = 0;           // gestures in progress; the guard file is removed when the outermost ends
+    struct GuardScope
+    {
+        explicit GuardScope (GraphController& c) : owner (c) { ++owner.guardDepth; }
+        ~GuardScope() { if (--owner.guardDepth == 0) lighthost::guard::clearGuard (owner.loadGuardFile); }
+        GraphController& owner;
+    };
 
     JUCE_DECLARE_NON_COPYABLE (GraphController)
 };

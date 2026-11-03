@@ -25,6 +25,7 @@
 #include "../Engine/GraphController.h"
 #include "LightHostLookAndFeel.h"
 #include "NodeCard.h"
+#include "SnapGuides.h"
 
 namespace lighthost::ui
 {
@@ -32,7 +33,7 @@ namespace lighthost::ui
 // Rounded chain-endpoint terminal (IN / OUT). A first-class draggable node: it
 // carries the document uid of the audioIn/audioOut node and reports body drags the
 // same way NodeCard does so the canvas can persist its position.
-class EndpointNode : public juce::Component
+class EndpointNode : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     explicit EndpointNode (juce::String labelText) : text (std::move (labelText)) {}
@@ -41,12 +42,20 @@ public:
     std::function<void (const juce::String&, juce::Point<int> delta)> onDragMove;
     std::function<void (const juce::String&)> onDragEnd;
 
+    // OUT nodes only: the device pair it feeds ("3/4"), whether that pair is active, an optional level
+    // readout of what reaches the pair, and the pair / remove menu (click on the pair text or right-click).
+    juce::String pairText;
+    bool inactive = false;
+    std::function<const MeterTap*()> getMeter;
+    std::function<void (const juce::String&)> onMenu;
+
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp   (const juce::MouseEvent&) override;
 
 private:
+    juce::Rectangle<int> pairRect() const { return getLocalBounds().withTrimmedTop (getHeight() / 2 + 18).withHeight (30); }
     juce::String text;
     bool nodeDragActive = false;
     juce::Point<int> lastParentPos;
@@ -66,6 +75,7 @@ public:
 
     // Supplied by the host (MainComponent / IconMenu).
     std::function<void (const juce::String& uid)> onOpenEditor;
+    std::function<void (const juce::String& uid, juce::Point<int> screenPos)> onReplace;   // card menu: Replace with…
     // factor > 1 zooms in. screenAnchor = the point to keep fixed (nullopt = view centre).
     std::function<void (float factor, std::optional<juce::Point<int>> screenAnchor)> onZoomBy;
     std::function<void()> onZoomReset;
@@ -84,6 +94,7 @@ public:
     juce::Rectangle<int> getContentBounds() const;
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;   // snap guides, above the cards
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
@@ -133,14 +144,16 @@ private:
     std::optional<juce::Point<float>> deleteBadgeCentre() const;
     void deleteSelectedCable();
     void showCableMenu (const Cable&);
+    void showCardMenu (const juce::String& uid);
+    void showOutputMenu (const juce::String& outUid);   // rebind to a device pair / remove an extra OUT
 
     juce::Viewport* findViewport() const { return findParentComponentOfClass<juce::Viewport>(); }
 
     GraphController& controller;
 
     juce::OwnedArray<NodeCard> cards;
-    EndpointNode inNode  { "IN"  };
-    EndpointNode outNode { "OUT" };
+    EndpointNode inNode { "IN" };
+    juce::OwnedArray<EndpointNode> outNodes;   // one per audioOut node, rebuilt with the cards
     std::vector<NodeView> views;
 
     // Wire-drag state.
@@ -156,6 +169,7 @@ private:
     juce::Point<int> panStartScreen;
     juce::Point<int> panStartView;
     std::optional<CableKey> pressedCable;   // press on a cable: select it on release unless it became a pan
+    bool badgeDeletedCable = false;         // this press deleted the selected cable via its x badge (a following double-click is not a Fit)
     std::optional<CableKey> selection;
 
     float flowPhase = 0.0f;
@@ -164,6 +178,12 @@ private:
     // Viewport size in pixels (set by the host).
     int viewportW = 0;
     int viewportH = 0;
+
+    // Node drag with snapping: the UNSNAPPED top-left accumulates the mouse deltas (snapping the already snapped
+    // position would make a card stick); the guides drawn while a snap is active.
+    juce::String dragUid;
+    juce::Point<float> rawTopLeft;
+    std::optional<float> guideX, guideY;
 
     bool suppressPlacement = false;   // a live drag grows the canvas without re-placing nodes from the document
 

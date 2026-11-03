@@ -52,6 +52,8 @@ public:
     // Double-click on a MISSING card (no editor to open) asks the canvas to retry
     // loading the plugin. On failure the canvas calls markRetryFailed().
     std::function<void (const juce::String&)> onRetry;
+    // Right-click on the card: the canvas shows the card menu (Replace with…, Open editor, Remove).
+    std::function<void (const juce::String&)> onContextMenu;
     void markRetryFailed();
 
     // Canvas-supplied node move: dragging the card BODY (not a knob or a header
@@ -68,6 +70,7 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
+    bool isSource = false;   // instrument: no input port, no Mix knob
     void applyBypassLook();
     void updateNameTooltip();                                    // full plugin name when the title is elided
     void setupGainPanKnobs();                                    // host channel strip

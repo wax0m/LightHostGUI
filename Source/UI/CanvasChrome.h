@@ -109,6 +109,53 @@ private:
 };
 
 //==============================================================================
+// Short result line over the canvas (e.g. after Replace…). The timer is one-shot and runs only
+// while the text is on screen: it stops itself the moment the label hides, so an unused feature
+// costs no timer.
+class NoticeLabel : public juce::Component, private juce::Timer
+{
+public:
+    static constexpr int maxWidth = 560;
+    static constexpr int height   = 30;
+    static constexpr int showMs   = 5000;
+
+    NoticeLabel() { setVisible (false); setInterceptsMouseClicks (false, false); }
+    ~NoticeLabel() override { stopTimer(); }
+
+    void show (const juce::String& message)
+    {
+        text = message;
+        setVisible (message.isNotEmpty());
+        repaint();
+        if (message.isNotEmpty())
+            startTimer (showMs);   // restarts the countdown if one is already running
+        else
+            stopTimer();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (LightHostLookAndFeel::nodeTop().withAlpha (0.96f));
+        g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+        g.setColour (LightHostLookAndFeel::accent().withAlpha (0.6f));
+        g.drawRoundedRectangle (b, b.getHeight() * 0.5f, 1.0f);
+        g.setColour (LightHostLookAndFeel::textPrimary());
+        g.setFont (LightHostLookAndFeel::display (12.5f));
+        g.drawFittedText (text, getLocalBounds().reduced (16, 0), juce::Justification::centred, 1);
+    }
+
+private:
+    void timerCallback() override
+    {
+        stopTimer();
+        setVisible (false);
+    }
+
+    juce::String text;
+};
+
+//==============================================================================
 class ZoomControls : public juce::Component
 {
 public:
